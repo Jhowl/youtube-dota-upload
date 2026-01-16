@@ -1,0 +1,7 @@
+watchdog==4.0.2
+requests==2.32.3
+python-dotenv==1.0.1
+google-api-python-client==2.158.0
+google-auth==2.38.0
+google-auth-oauthlib==1.2.1
+tzdata==2025.1

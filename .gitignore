@@ -1,0 +1,19 @@
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.venv/
+venv/
+
+# Local output
+watch/
+
+# Secrets
+client_secret_*.json
+
+# OS
+.DS_Store

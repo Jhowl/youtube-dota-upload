@@ -20,7 +20,7 @@ def upload_to_youtube(config: Config, *, file_path: str, title: str, description
         scopes=["https://www.googleapis.com/auth/youtube.upload"],
     )
 
-    # Refresh to get an access token.
+    print("[upload] refreshing access token")
     creds.refresh(Request())
 
     youtube = build("youtube", "v3", credentials=creds)
@@ -34,6 +34,8 @@ def upload_to_youtube(config: Config, *, file_path: str, title: str, description
         },
         "status": {"privacyStatus": config.youtube_privacy_status},
     }
+
+    print(f"[upload] uploading file: {file_path}")
 
     request = youtube.videos().insert(
         part="snippet,status",

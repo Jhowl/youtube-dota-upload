@@ -12,8 +12,6 @@ venv/
 # Local output
 watch/
 
-# Secrets
-client_secret_*.json
 
 # OS
 .DS_Store

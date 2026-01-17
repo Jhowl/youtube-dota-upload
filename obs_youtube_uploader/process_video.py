@@ -106,12 +106,14 @@ def process_video(config: Config, video_path: Path) -> None:
         title = f"Dota 2 {recording_start_utc.isoformat(timespec='seconds')}Z - Match {match_id}"
 
         if not config.dry_run:
+            print(f"[upload:start] {video_path.name} -> YouTube")
             youtube_video_id = upload_to_youtube(
                 config,
                 file_path=str(video_path),
                 title=title,
                 description=description,
             )
+            print(f"[upload:done] videoId={youtube_video_id}")
 
         try:
             send_finished_notification(

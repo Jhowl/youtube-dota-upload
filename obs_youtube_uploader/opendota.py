@@ -59,6 +59,25 @@ def fetch_match(match_id: int) -> dict[str, Any]:
     return res.json()
 
 
+_PATCHES_CACHE: list[dict[str, Any]] | None = None
+
+
+def fetch_patches() -> list[dict[str, Any]]:
+    global _PATCHES_CACHE
+    if _PATCHES_CACHE is not None:
+        return _PATCHES_CACHE
+
+    url = "https://api.opendota.com/api/constants/patch"
+    res = requests.get(url, timeout=30)
+    res.raise_for_status()
+    data = res.json()
+    if not isinstance(data, list):
+        raise RuntimeError("Unexpected patch constants payload")
+
+    _PATCHES_CACHE = data
+    return _PATCHES_CACHE
+
+
 _HEROES_CACHE: dict[str, Any] | None = None
 _ITEMS_CACHE: dict[str, Any] | None = None
 

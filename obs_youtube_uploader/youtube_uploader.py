@@ -10,7 +10,14 @@ from googleapiclient.http import MediaFileUpload
 from .config import Config
 
 
-def upload_to_youtube(config: Config, *, file_path: str, title: str, description: str) -> str:
+def upload_to_youtube(
+    config: Config,
+    *,
+    file_path: str,
+    title: str,
+    description: str,
+    tags: list[str] | None = None,
+) -> str:
     creds = Credentials(
         token=None,
         refresh_token=config.youtube_refresh_token,
@@ -30,7 +37,7 @@ def upload_to_youtube(config: Config, *, file_path: str, title: str, description
             "title": title,
             "description": description,
             "categoryId": config.youtube_category_id,
-            "tags": config.youtube_tags or None,
+            "tags": tags if tags is not None else (config.youtube_tags or None),
         },
         "status": {"privacyStatus": config.youtube_privacy_status},
     }

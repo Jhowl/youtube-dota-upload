@@ -1,0 +1,11 @@
+services:
+  obs-youtube-uploader:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "4321:4321"
+    volumes:
+      - ./watch:/app/watch
+      - ./data:/app/data
+    restart: unless-stopped

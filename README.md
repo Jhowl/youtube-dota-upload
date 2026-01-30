@@ -1,6 +1,6 @@
 # OBS  YouTube Uploader (Python)
 
-Watches a folder for new OBS recording files, matches the recording time to a Dota 2 match using OpenDota, writes a `.txt` description with match details (including items), uploads the video to YouTube, then sends a completion webhook notification.
+Watches a folder for new OBS recording files, matches the recording time to a Dota 2 match using OpenDota, writes a `.txt` description with match details (including items), queues the video in a local dashboard for review, uploads the video to YouTube on manual approval, then sends a completion webhook notification.
 
 This project is designed to run on **Windows via Docker**.
 
@@ -23,8 +23,9 @@ When a new video appears in the watch folder:
    - your hero + K/D/A
    - your items (main/backpack/neutral)
    - OpenDota match link
-6. Uploads the video to YouTube.
-7. Sends a webhook notification:
+6. Enqueues the video in a local web dashboard for review/edit.
+7. Uploads the video to YouTube when you click **Upload**.
+8. Sends a webhook notification:
    - `POST https://n8n.jhowl.com/webhook/2a55d28f-0635-46b5-878b-0b64f388d363`
 
 ## Project Layout
@@ -54,6 +55,9 @@ Key variables:
 - `VIDEO_EXTENSIONS`: default `.mp4,.mkv`
 - `PROCESS_EXISTING`: if `true`, processes existing files already in the folder on startup
 - `DRY_RUN`: if `true`, skips YouTube upload + webhook (still generates `.txt`)
+- `WEB_PORT`: dashboard port (default `4321`)
+- `SEQUENCE_START`: next sequence number for title suffix (e.g., `217` -> title ends with `#217`)
+- `DATA_DIR` / `UPLOADS_DB`: local DB storage for the upload queue
 
 Time + match matching:
 
@@ -109,6 +113,7 @@ docker build -t obs-youtube-uploader:py .
 ```powershell
 docker run --rm -it `
   --env-file .env `
+  -p 4321:4321 `
   -v "${PWD}\watch:/app/watch" `
   obs-youtube-uploader:py
 ```
@@ -120,8 +125,43 @@ Replace the `-v` with your OBS recordings path:
 ```powershell
 docker run --rm -it `
   --env-file .env `
+  -p 4321:4321 `
   -v "C:\Users\YOUR_USER\Videos\OBS:/app/watch" `
   obs-youtube-uploader:py
+```
+
+## Dashboard
+
+Open the local dashboard to edit metadata and manually upload:
+
+- `http://localhost:4321`
+
+Each queued video includes:
+
+- Title (ends with `#<sequence>`)
+- Description
+- Tags (comma separated)
+
+Click **Save** to store edits, then **Upload** to send to YouTube.
+
+## Docker Compose (recommended for auto-start)
+
+```powershell
+docker compose up -d
+```
+
+This uses `restart: unless-stopped` to keep the service running.
+
+## Windows auto-start (Task Scheduler)
+
+1. Open **Task Scheduler** -> **Create Task**
+2. Trigger: **At log on** (or **At startup**)
+3. Action: **Start a program**
+4. Program/script: `powershell.exe`
+5. Arguments:
+
+```powershell
+-WindowStyle Hidden -Command "cd C:\path\to\obs-youtube-uploader; docker compose up -d"
 ```
 
 ## Filename Format (Important)
@@ -148,7 +188,7 @@ The app creates:
 
 - `watch/2025-12-12_20-24-33.txt`
 
-And then uploads to YouTube (unless `DRY_RUN=true`).
+And then uploads to YouTube when approved in the dashboard (unless `DRY_RUN=true`).
 
 ## Webhook Payload
 

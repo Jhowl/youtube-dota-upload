@@ -14,6 +14,10 @@ class Config:
     process_existing: bool
     dry_run: bool
 
+    uploads_db_path: Path
+    web_port: int
+    sequence_start: int
+
     recording_tz: str
     match_time_before_sec: int
     match_time_after_sec: int
@@ -55,6 +59,12 @@ def load_config() -> Config:
 
     watch_folder = Path(os.getenv("WATCH_FOLDER") or (Path.cwd() / "watch")).resolve()
 
+    data_dir = Path(os.getenv("DATA_DIR") or (Path.cwd() / "data")).resolve()
+    uploads_db_path = Path(os.getenv("UPLOADS_DB") or (data_dir / "uploads.db")).resolve()
+
+    web_port = int(os.getenv("WEB_PORT") or "4321")
+    sequence_start = int(os.getenv("SEQUENCE_START") or "1")
+
     recording_tz = os.getenv("RECORDING_TZ") or "America/New_York"
 
     match_time_before_sec = int(os.getenv("MATCH_TIME_BEFORE_SEC") or str(3 * 60 * 60))
@@ -87,6 +97,9 @@ def load_config() -> Config:
         video_extensions=_parse_extensions(os.getenv("VIDEO_EXTENSIONS")),
         process_existing=_parse_bool(os.getenv("PROCESS_EXISTING"), False),
         dry_run=dry_run,
+        uploads_db_path=uploads_db_path,
+        web_port=web_port,
+        sequence_start=sequence_start,
         recording_tz=recording_tz,
         match_time_before_sec=match_time_before_sec,
         match_time_after_sec=match_time_after_sec,

@@ -10,7 +10,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver
 
 from .config import Config
-from .process_video import process_video
+from .uploads import enqueue_video
 
 
 def _is_wanted(file_path: Path, exts: set[str]) -> bool:
@@ -82,7 +82,7 @@ def run_watcher(config: Config) -> None:
             # Wait for OBS to finish writing.
             _wait_for_stable(item.path, stable_seconds=20, poll_interval=2.0)
 
-            process_video(config, item.path)
+            enqueue_video(config, item.path)
 
     except KeyboardInterrupt:
         print("[watcher] stopping...")

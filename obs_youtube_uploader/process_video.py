@@ -22,6 +22,15 @@ from .opendota import (
 from .youtube_uploader import upload_to_youtube
 
 
+@dataclass(frozen=True)
+class VideoDefaults:
+    title: str
+    description: str
+    tags: list[str]
+    match_id: int
+    description_path: Path
+
+
 def _hero_name(heroes: dict, hero_id: int) -> str:
     for h in heroes.values():
         if int(h.get("id", -1)) == hero_id:
@@ -176,6 +185,14 @@ def _build_tags(hero: str, patch: str | None, item_names: list[str]) -> list[str
     return dedup[:35]
 
 
+_SEQ_RE = re.compile(r"\s+#\d+\s*$")
+
+
+def apply_sequence_to_title(title: str, sequence: int) -> str:
+    cleaned = _SEQ_RE.sub("", title).rstrip()
+    return f"{cleaned} #{sequence}".strip()
+
+
 _FILENAME_RE = re.compile(
     r"(?P<y>\d{4})[-_](?P<mo>\d{2})[-_](?P<d>\d{2})[ _-](?P<h>\d{2})[-_](?P<mi>\d{2})[-_](?P<s>\d{2})"
 )
@@ -232,92 +249,113 @@ def _description_path(video_path: Path) -> Path:
     return video_path.with_suffix(".txt")
 
 
-def process_video(config: Config, video_path: Path) -> None:
-    started_at = datetime.now(timezone.utc)
+def build_defaults(config: Config, video_path: Path, *, sequence: int | None = None) -> VideoDefaults:
+    recording_start_utc = _parse_obs_filename_time_to_utc(video_path, config.recording_tz)
+    match_id = _resolve_match_id(config, recording_start_utc)
 
-    match_id: int | None = None
+    match = fetch_match(match_id)
+    heroes = fetch_heroes()
+    items = fetch_items()
+    patches = fetch_patches()
+
+    description = build_match_description(
+        recording_start_utc=recording_start_utc,
+        player_account_id=config.opendota_player_id,
+        match=match,
+        heroes=heroes,
+        items=items,
+    )
+
+    player = _player_from_match(match, config.opendota_player_id)
+    hero = _hero_name(heroes, int(player.get("hero_id", 0))) if player else "Dota 2"
+    patch_name = _patch_name_for_match(match, patches)
+    player_is_radiant = bool(player) and int(player.get("player_slot", 0) or 0) < 128
+    radiant_win = bool(match.get("radiant_win"))
+    result = "Win" if (radiant_win if player_is_radiant else not radiant_win) else "Loss"
+    duration_min = max(1, int(int(match.get("duration", 0)) / 60))
+
+    item_names = _extract_item_names(player, items) if player else []
+
+    score_text = f"Radiant {int(match.get('radiant_score', 0))} - {int(match.get('dire_score', 0))} Dire"
+    kda_text = None
+    if player:
+        kda_text = f"{int(player.get('kills', 0))}/{int(player.get('deaths', 0))}/{int(player.get('assists', 0))}"
+
+    items_text = ", ".join(item_names[:8]) if item_names else None
+
+    title = _build_seo_title(hero, patch_name, result, duration_min, int(match.get("match_id") or match_id))
+    if sequence is not None:
+        title = apply_sequence_to_title(title, sequence)
+
+    extra_lines: list[str] = []
+    extra_lines.append("")
+    extra_lines.append("Video")
+    extra_lines.append(f"Hero: {hero}")
+    if patch_name:
+        extra_lines.append(f"Patch: {patch_name}")
+    if item_names:
+        extra_lines.append("Items: " + ", ".join(item_names[:12]))
+    extra_lines.append(f"Match: https://www.opendota.com/matches/{match_id}")
+    extra_lines.append("\n#dota2 #dota #opendota")
+
+    match_id_for_prompt = int(match.get("match_id") or match_id)
+    thumbnail_prompt = _build_thumbnail_prompt(
+        hero=hero,
+        patch=patch_name,
+        result=result,
+        duration_min=duration_min,
+        score_text=score_text,
+        kda_text=kda_text,
+        items_text=items_text,
+        match_id=match_id_for_prompt,
+    )
+
+    extra_lines.append("")
+    extra_lines.append("Thumbnail Prompt")
+    extra_lines.append(thumbnail_prompt)
+
+    full_description = description + "\n".join(extra_lines) + "\n"
+
+    description_path = _description_path(video_path)
+    description_path.write_text(full_description, encoding="utf-8")
+
+    seo_tags = _build_tags(hero, patch_name, item_names)
+
+    return VideoDefaults(
+        title=title,
+        description=full_description,
+        tags=seo_tags,
+        match_id=match_id,
+        description_path=description_path,
+    )
+
+
+def perform_upload(
+    config: Config,
+    *,
+    video_path: Path,
+    title: str,
+    description: str,
+    tags: list[str],
+    description_path: Path | None,
+    match_id: int | None,
+    started_at: datetime | None = None,
+) -> str | None:
+    started = started_at or datetime.now(timezone.utc)
     youtube_video_id: str | None = None
-    description_path: Path | None = None
+
+    if description_path:
+        description_path.write_text(description, encoding="utf-8")
 
     try:
-        recording_start_utc = _parse_obs_filename_time_to_utc(video_path, config.recording_tz)
-        match_id = _resolve_match_id(config, recording_start_utc)
-
-        match = fetch_match(match_id)
-        heroes = fetch_heroes()
-        items = fetch_items()
-        patches = fetch_patches()
-
-        description = build_match_description(
-            recording_start_utc=recording_start_utc,
-            player_account_id=config.opendota_player_id,
-            match=match,
-            heroes=heroes,
-            items=items,
-        )
-
-        player = _player_from_match(match, config.opendota_player_id)
-        hero = _hero_name(heroes, int(player.get("hero_id", 0))) if player else "Dota 2"
-        patch_name = _patch_name_for_match(match, patches)
-        player_is_radiant = bool(player) and int(player.get("player_slot", 0) or 0) < 128
-        radiant_win = bool(match.get("radiant_win"))
-        result = "Win" if (radiant_win if player_is_radiant else not radiant_win) else "Loss"
-        duration_min = max(1, int(int(match.get("duration", 0)) / 60))
-
-        item_names = _extract_item_names(player, items) if player else []
-
-        score_text = f"Radiant {int(match.get('radiant_score', 0))} - {int(match.get('dire_score', 0))} Dire"
-        kda_text = None
-        if player:
-            kda_text = f"{int(player.get('kills', 0))}/{int(player.get('deaths', 0))}/{int(player.get('assists', 0))}"
-
-        items_text = ", ".join(item_names[:8]) if item_names else None
-
-        title = _build_seo_title(hero, patch_name, result, duration_min, int(match.get("match_id") or match_id))
-
-        # SEO: add extra sections to description
-        extra_lines: list[str] = []
-        extra_lines.append("")
-        extra_lines.append("Video")
-        extra_lines.append(f"Hero: {hero}")
-        if patch_name:
-            extra_lines.append(f"Patch: {patch_name}")
-        if item_names:
-            extra_lines.append("Items: " + ", ".join(item_names[:12]))
-        extra_lines.append(f"Match: https://www.opendota.com/matches/{match_id}")
-        extra_lines.append("\n#dota2 #dota #opendota")
-
-        match_id_for_prompt = int(match.get("match_id") or match_id)
-        thumbnail_prompt = _build_thumbnail_prompt(
-            hero=hero,
-            patch=patch_name,
-            result=result,
-            duration_min=duration_min,
-            score_text=score_text,
-            kda_text=kda_text,
-            items_text=items_text,
-            match_id=match_id_for_prompt,
-        )
-
-        extra_lines.append("")
-        extra_lines.append("Thumbnail Prompt")
-        extra_lines.append(thumbnail_prompt)
-
-        full_description = description + "\n".join(extra_lines) + "\n"
-
-        description_path = _description_path(video_path)
-        description_path.write_text(full_description, encoding="utf-8")
-
-        seo_tags = _build_tags(hero, patch_name, item_names)
-
         if not config.dry_run:
             print(f"[upload:start] {video_path.name} -> YouTube")
             youtube_video_id = upload_to_youtube(
                 config,
                 file_path=str(video_path),
                 title=title,
-                description=full_description,
-                tags=seo_tags,
+                description=description,
+                tags=tags,
             )
             print(f"[upload:done] videoId={youtube_video_id}")
 
@@ -325,7 +363,7 @@ def process_video(config: Config, video_path: Path) -> None:
             send_finished_notification(
                 config,
                 status="success",
-                started_at=started_at,
+                started_at=started,
                 finished_at=datetime.now(timezone.utc),
                 video_path=str(video_path),
                 description_path=str(description_path) if description_path else None,
@@ -335,14 +373,14 @@ def process_video(config: Config, video_path: Path) -> None:
         except Exception as notify_err:
             print(f"[notify:error] {notify_err}")
 
-        print(f"[done] {video_path}")
+        return youtube_video_id
 
     except Exception as err:
         try:
             send_finished_notification(
                 config,
                 status="error",
-                started_at=started_at,
+                started_at=started,
                 finished_at=datetime.now(timezone.utc),
                 video_path=str(video_path),
                 description_path=str(description_path) if description_path else None,
@@ -353,4 +391,21 @@ def process_video(config: Config, video_path: Path) -> None:
         except Exception as notify_err:
             print(f"[notify:error] {notify_err}")
 
+        raise
+
+
+def process_video(config: Config, video_path: Path) -> None:
+    try:
+        defaults = build_defaults(config, video_path, sequence=config.sequence_start)
+        perform_upload(
+            config,
+            video_path=video_path,
+            title=defaults.title,
+            description=defaults.description,
+            tags=defaults.tags,
+            description_path=defaults.description_path,
+            match_id=defaults.match_id,
+        )
+        print(f"[done] {video_path}")
+    except Exception as err:
         print(f"[process:error] {video_path} {err}")

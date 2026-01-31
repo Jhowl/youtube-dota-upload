@@ -29,6 +29,7 @@ class VideoDefaults:
     tags: list[str]
     match_id: int
     description_path: Path
+    thumbnail_prompt: str
 
 
 def _hero_name(heroes: dict, hero_id: int) -> str:
@@ -69,7 +70,7 @@ def _patch_name_for_match(match: dict, patches: list[dict]) -> str | None:
     return None
 
 
-def _build_seo_title(hero: str, patch: str | None, result: str, duration_min: int, match_id: int) -> str:
+def _build_seo_title(hero: str, patch: str | None, result: str, duration_min: int) -> str:
     parts: list[str] = []
     parts.append(f"{hero} Gameplay")
     if patch:
@@ -77,7 +78,6 @@ def _build_seo_title(hero: str, patch: str | None, result: str, duration_min: in
     parts.append(result)
     parts.append(f"{duration_min}min")
     parts.append("Dota 2")
-    parts.append(f"Match {match_id}")
     return " | ".join(parts)
 
 
@@ -133,8 +133,6 @@ def _build_thumbnail_prompt(
     lines.append(f"Score: {score_text}.")
     if kda_text:
         lines.append(f"KDA: {kda_text}.")
-    if items_text:
-        lines.append(f"Key items: {items_text}.")
     lines.append(f"{patch_part}.")
     lines.append(f"Match ID: {match_id}.")
     lines.append(
@@ -185,12 +183,12 @@ def _build_tags(hero: str, patch: str | None, item_names: list[str]) -> list[str
     return dedup[:35]
 
 
-_SEQ_RE = re.compile(r"\s+#\d+\s*$")
+_SEQ_RE = re.compile(r"\s+#\d+\s*(?:🧙‍♂️)?\s*$")
 
 
 def apply_sequence_to_title(title: str, sequence: int) -> str:
     cleaned = _SEQ_RE.sub("", title).rstrip()
-    return f"{cleaned} #{sequence}".strip()
+    return f"{cleaned} #{sequence} 🧙‍♂️".strip()
 
 
 _FILENAME_RE = re.compile(
@@ -283,7 +281,7 @@ def build_defaults(config: Config, video_path: Path, *, sequence: int | None = N
 
     items_text = ", ".join(item_names[:8]) if item_names else None
 
-    title = _build_seo_title(hero, patch_name, result, duration_min, int(match.get("match_id") or match_id))
+    title = _build_seo_title(hero, patch_name, result, duration_min)
     if sequence is not None:
         title = apply_sequence_to_title(title, sequence)
 
@@ -306,7 +304,7 @@ def build_defaults(config: Config, video_path: Path, *, sequence: int | None = N
         duration_min=duration_min,
         score_text=score_text,
         kda_text=kda_text,
-        items_text=items_text,
+        items_text=None,
         match_id=match_id_for_prompt,
     )
 
@@ -327,6 +325,7 @@ def build_defaults(config: Config, video_path: Path, *, sequence: int | None = N
         tags=seo_tags,
         match_id=match_id,
         description_path=description_path,
+        thumbnail_prompt=thumbnail_prompt,
     )
 
 

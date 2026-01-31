@@ -36,6 +36,7 @@ def _record_to_dict(record: UploadRecord) -> dict[str, Any]:
         "default_title": record.default_title or "",
         "default_description": record.default_description or "",
         "default_tags": record.default_tags or "",
+        "thumbnail_prompt": record.thumbnail_prompt or "",
         "description_path": record.description_path,
         "match_id": record.match_id,
         "youtube_video_id": record.youtube_video_id,

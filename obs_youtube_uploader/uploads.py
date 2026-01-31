@@ -46,6 +46,7 @@ def enqueue_video(config: Config, video_path: Path) -> UploadRecord:
             sequence=sequence,
             description_path=str(defaults.description_path),
             match_id=defaults.match_id,
+            thumbnail_prompt=defaults.thumbnail_prompt,
         )
     except Exception as err:
         record = create_upload(

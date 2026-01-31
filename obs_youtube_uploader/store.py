@@ -21,6 +21,7 @@ class UploadRecord:
     edited_tags: str | None
     description_path: str | None
     match_id: int | None
+    thumbnail_prompt: str | None
     youtube_video_id: str | None
     error: str | None
     created_at: str
@@ -55,6 +56,7 @@ def init_db(db_path: Path) -> None:
                 edited_tags TEXT,
                 description_path TEXT,
                 match_id INTEGER,
+                thumbnail_prompt TEXT,
                 youtube_video_id TEXT,
                 error TEXT,
                 created_at TEXT NOT NULL,
@@ -63,6 +65,13 @@ def init_db(db_path: Path) -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_status ON uploads(status)")
+        _ensure_columns(conn)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(uploads)")}
+    if "thumbnail_prompt" not in columns:
+        conn.execute("ALTER TABLE uploads ADD COLUMN thumbnail_prompt TEXT")
 
 
 def get_next_sequence(db_path: Path, sequence_start: int) -> int:
@@ -111,6 +120,7 @@ def create_upload(
     sequence: int | None,
     description_path: str | None,
     match_id: int | None,
+    thumbnail_prompt: str | None = None,
     error: str | None = None,
 ) -> UploadRecord:
     now = _utc_now()
@@ -120,9 +130,9 @@ def create_upload(
                 """
                 INSERT INTO uploads (
                     video_path, status, default_title, default_description, default_tags, sequence,
-                    edited_title, edited_description, edited_tags, description_path, match_id,
+                    edited_title, edited_description, edited_tags, description_path, match_id, thumbnail_prompt,
                     youtube_video_id, error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, NULL, ?, ?, ?)
                 """,
                 (
                     video_path,
@@ -133,6 +143,7 @@ def create_upload(
                     sequence,
                     description_path,
                     match_id,
+                    thumbnail_prompt,
                     error,
                     now,
                     now,

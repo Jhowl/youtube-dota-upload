@@ -15,8 +15,8 @@ const statusLabels = {
 const statusOrder = ["pending", "uploading", "error", "uploaded", "skipped"];
 
 const applySequenceToTitle = (title, seq) => {
-  const cleaned = title.replace(/\s+#\d+\s*$/, "").trim();
-  return `${cleaned} #${seq}`.trim();
+  const cleaned = title.replace(/\s+#\d+\s*(?:🧙‍♂️)?\s*$/, "").trim();
+  return `${cleaned} #${seq} 🧙‍♂️`.trim();
 };
 
 const fetchVideos = async () => {
@@ -80,6 +80,13 @@ const renderCard = (video) => {
     <div class="status ${video.status}">${statusText}</div>
   `;
 
+  if (video.sequence) {
+    const badge = document.createElement("div");
+    badge.className = "seq-badge";
+    badge.textContent = `#${video.sequence}`;
+    card.appendChild(badge);
+  }
+
   const grid = document.createElement("div");
   grid.className = "grid";
 
@@ -101,6 +108,11 @@ const renderCard = (video) => {
   const descInput = descField.querySelector("textarea");
   descInput.value = video.description || "";
 
+  const promptField = createField("Thumbnail Prompt", "textarea");
+  const promptInput = promptField.querySelector("textarea");
+  promptInput.value = video.thumbnail_prompt || "";
+  promptInput.readOnly = true;
+
   seqInput.addEventListener("input", () => {
     const seqValue = Number(seqInput.value);
     if (!Number.isNaN(seqValue) && seqValue > 0) {
@@ -112,6 +124,7 @@ const renderCard = (video) => {
   grid.appendChild(seqField);
   grid.appendChild(tagsField);
   grid.appendChild(descField);
+  grid.appendChild(promptField);
 
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -144,9 +157,19 @@ const renderCard = (video) => {
     await fetch(`/api/videos/${video.id}/skip`, { method: "POST" });
   };
 
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "btn ghost";
+  copyBtn.textContent = "Copy Prompt";
+  copyBtn.onclick = async () => {
+    if (navigator.clipboard && promptInput.value) {
+      await navigator.clipboard.writeText(promptInput.value);
+    }
+  };
+
   actions.appendChild(saveBtn);
   actions.appendChild(uploadBtn);
   actions.appendChild(skipBtn);
+  actions.appendChild(copyBtn);
 
   card.appendChild(header);
   card.appendChild(grid);

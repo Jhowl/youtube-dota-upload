@@ -124,6 +124,21 @@ body {
   padding: 20px;
   box-shadow: var(--shadow);
   animation: fadeIn 0.4s ease;
+  position: relative;
+}
+
+.seq-badge {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  background: rgba(111, 169, 255, 0.15);
+  border: 1px solid rgba(111, 169, 255, 0.4);
+  font-family: "JetBrains Mono", monospace;
 }
 
 .card-header {
@@ -180,6 +195,11 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.grid .field textarea[readonly] {
+  opacity: 0.9;
+  border-style: dashed;
 }
 
 .field {

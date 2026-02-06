@@ -74,12 +74,14 @@ def _build_seo_title(hero: str, patch: str | None, result: str) -> str:
     """Build the default YouTube title.
 
     Intentionally avoids durations/timers (e.g. "33min") because they add noise.
+    Adds Turbo so the mode is visible at a glance.
     """
     parts: list[str] = []
     parts.append(f"{hero} Gameplay")
     if patch:
         parts.append(f"Patch {patch}")
     parts.append(result)
+    parts.append("Turbo")
     parts.append("Dota 2")
     return " | ".join(parts)
 

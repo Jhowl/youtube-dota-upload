@@ -33,6 +33,11 @@ def _format_item_list(items: dict[str, Any], ids: list[int | None]) -> str:
     return ", ".join(names) if names else "—"
 
 
+def _hashtagify(text: str) -> str:
+    # "Storm Spirit" -> "stormspirit"
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
 def build_match_description(
     *,
     recording_start_utc: datetime,
@@ -46,7 +51,21 @@ def build_match_description(
 
     winner = "Radiant" if bool(match.get("radiant_win")) else "Dire"
 
+    # Put keywords/hashtags right at the top (YouTube cares about early description text).
+    player = None
+    for p in match.get("players", []) or []:
+        if p.get("account_id") == player_account_id:
+            player = p
+            break
+
+    hero_name = _hero_name(heroes, int(player.get("hero_id", 0))) if player else "dota2"
+    hero_tag = _hashtagify(hero_name)
+
     lines: list[str] = []
+    lines.append(f"#dota2 #{hero_tag} #turbo")
+    lines.append(f"Dota 2 Turbo {hero_name} gameplay and build.")
+    lines.append("")
+
     lines.append(f"Match ID: {match_id}")
     lines.append(f"Recording start (UTC): {recording_start_utc.isoformat()}Z")
     lines.append(f"Match start (UTC): {match_start.isoformat()}Z")
@@ -55,12 +74,6 @@ def build_match_description(
     lines.append(
         f"Score: Radiant {int(match.get('radiant_score', 0))} - {int(match.get('dire_score', 0))} Dire"
     )
-
-    player = None
-    for p in match.get("players", []) or []:
-        if p.get("account_id") == player_account_id:
-            player = p
-            break
 
     if player:
         lines.append("")

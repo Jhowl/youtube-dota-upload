@@ -70,13 +70,16 @@ def _patch_name_for_match(match: dict, patches: list[dict]) -> str | None:
     return None
 
 
-def _build_seo_title(hero: str, patch: str | None, result: str, duration_min: int) -> str:
+def _build_seo_title(hero: str, patch: str | None, result: str) -> str:
+    """Build the default YouTube title.
+
+    Intentionally avoids durations/timers (e.g. "33min") because they add noise.
+    """
     parts: list[str] = []
     parts.append(f"{hero} Gameplay")
     if patch:
         parts.append(f"Patch {patch}")
     parts.append(result)
-    parts.append(f"{duration_min}min")
     parts.append("Dota 2")
     return " | ".join(parts)
 
@@ -117,30 +120,31 @@ def _build_thumbnail_prompt(
     hero: str,
     patch: str | None,
     result: str,
-    duration_min: int,
-    score_text: str,
     kda_text: str | None,
-    items_text: str | None,
-    match_id: int,
+    sequence: int | None,
 ) -> str:
+    """Default thumbnail prompt.
+
+    Comic/fun by default. Avoids score + match ID (too much clutter for thumbnails).
+    """
+
     patch_part = f"Patch {patch}" if patch else "Current Patch"
 
     lines: list[str] = []
-    lines.append("Create a YouTube thumbnail for a Dota 2 match video.")
+    lines.append("Create a fun, comic-book style YouTube thumbnail for a Dota 2 match.")
     lines.append(f"Hero: {hero}.")
     lines.append(f"Match result: {result}.")
-    lines.append(f"Match length: {duration_min} minutes.")
-    lines.append(f"Score: {score_text}.")
     if kda_text:
         lines.append(f"KDA: {kda_text}.")
     lines.append(f"{patch_part}.")
-    lines.append(f"Match ID: {match_id}.")
+    if sequence is not None:
+        lines.append(f"Add a small badge in the top-right corner: '#{sequence}'.")
     lines.append(
-        "Style: high-contrast esports thumbnail, sharp hero portrait, dynamic action background, "
-        "bold readable text, clean composition, 16:9, 1280x720."
+        "Style: comic-book / meme-y but clean, high contrast, bold outlines, dynamic action background, "
+        "big expressive hero portrait, crisp edges, 16:9, 1280x720."
     )
     lines.append(
-        "Text overlay (few words): '" + hero.upper() + " BUILD' and '" + result.upper() + "' and '" + patch_part.upper() + "'."
+        "Text overlay (few words, BIG): '" + hero.upper() + " BUILD' and '" + result.upper() + "' and '" + patch_part.upper() + "'."
     )
     lines.append("Avoid: small text, clutter, watermarks, blurry faces.")
 
@@ -274,18 +278,13 @@ def build_defaults(config: Config, video_path: Path, *, sequence: int | None = N
     player_is_radiant = bool(player) and int(player.get("player_slot", 0) or 0) < 128
     radiant_win = bool(match.get("radiant_win"))
     result = "Win" if (radiant_win if player_is_radiant else not radiant_win) else "Loss"
-    duration_min = max(1, int(int(match.get("duration", 0)) / 60))
-
     item_names = _extract_item_names(player, items) if player else []
 
-    score_text = f"Radiant {int(match.get('radiant_score', 0))} - {int(match.get('dire_score', 0))} Dire"
     kda_text = None
     if player:
         kda_text = f"{int(player.get('kills', 0))}/{int(player.get('deaths', 0))}/{int(player.get('assists', 0))}"
 
-    items_text = ", ".join(item_names[:8]) if item_names else None
-
-    title = _build_seo_title(hero, patch_name, result, duration_min)
+    title = _build_seo_title(hero, patch_name, result)
     if sequence is not None:
         title = apply_sequence_to_title(title, sequence)
 
@@ -300,21 +299,16 @@ def build_defaults(config: Config, video_path: Path, *, sequence: int | None = N
     extra_lines.append(f"Match: https://www.opendota.com/matches/{match_id}")
     extra_lines.append("\n#dota2 #dota #opendota")
 
-    match_id_for_prompt = int(match.get("match_id") or match_id)
     thumbnail_prompt = _build_thumbnail_prompt(
         hero=hero,
         patch=patch_name,
         result=result,
-        duration_min=duration_min,
-        score_text=score_text,
         kda_text=kda_text,
-        items_text=None,
-        match_id=match_id_for_prompt,
+        sequence=sequence,
     )
 
-    extra_lines.append("")
-    extra_lines.append("Thumbnail Prompt")
-    extra_lines.append(thumbnail_prompt)
+    # Note: we do NOT append the thumbnail prompt into the YouTube description.
+    # The prompt is stored in the uploads DB for the web UI, but kept out of the public description.
 
     full_description = description + "\n".join(extra_lines) + "\n"
 

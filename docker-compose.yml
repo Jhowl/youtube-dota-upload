@@ -5,7 +5,11 @@ services:
       - .env
     ports:
       - "4321:4321"
+    # user: "1000:1000"  # disabled; root can write to /mnt/filmes and avoids volume permission issues
     volumes:
-      - ./watch:/app/watch
-      - ./data:/app/data
+      - /mnt/filmes/o:/app/watch
+      - uploads_data:/app/data
     restart: unless-stopped
+
+volumes:
+  uploads_data:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 import threading
 from typing import Any
 
@@ -162,6 +163,36 @@ def _do_upload(config: Config, upload_id: int) -> None:
         )
         if updated is not None:
             EVENT_BUS.publish("upload_updated", record_to_event(updated))
+
+        # Optional: archive files after successful upload.
+        if config.move_after_upload:
+            try:
+                config.archive_folder.mkdir(parents=True, exist_ok=True)
+
+                src_video = Path(record.video_path)
+                dst_video = config.archive_folder / src_video.name
+                if src_video.exists() and not dst_video.exists():
+                    shutil.move(str(src_video), str(dst_video))
+
+                new_fields: dict[str, Any] = {}
+                if dst_video.exists():
+                    new_fields["video_path"] = str(dst_video)
+
+                if record.description_path:
+                    src_desc = Path(record.description_path)
+                    dst_desc = config.archive_folder / src_desc.name
+                    if src_desc.exists() and not dst_desc.exists():
+                        shutil.move(str(src_desc), str(dst_desc))
+                    if dst_desc.exists():
+                        new_fields["description_path"] = str(dst_desc)
+
+                if new_fields:
+                    moved = update_upload(config.uploads_db_path, upload_id, new_fields)
+                    if moved is not None:
+                        EVENT_BUS.publish("upload_updated", record_to_event(moved))
+            except Exception as move_err:
+                # Don't fail the upload just because archiving failed.
+                print(f"[uploads] warning: failed to archive files: {move_err}")
     except Exception as err:
         updated = set_status(
             config.uploads_db_path,

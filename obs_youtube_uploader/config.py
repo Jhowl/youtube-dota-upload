@@ -14,6 +14,9 @@ class Config:
     process_existing: bool
     dry_run: bool
 
+    move_after_upload: bool
+    archive_folder: Path
+
     uploads_db_path: Path
     web_port: int
     sequence_start: int
@@ -59,6 +62,9 @@ def load_config() -> Config:
 
     watch_folder = Path(os.getenv("WATCH_FOLDER") or (Path.cwd() / "watch")).resolve()
 
+    move_after_upload = _parse_bool(os.getenv("MOVE_AFTER_UPLOAD"), False)
+    archive_folder = Path(os.getenv("ARCHIVE_FOLDER") or (watch_folder / "uploaded")).resolve()
+
     data_dir = Path(os.getenv("DATA_DIR") or (Path.cwd() / "data")).resolve()
     uploads_db_path = Path(os.getenv("UPLOADS_DB") or (data_dir / "uploads.db")).resolve()
 
@@ -97,6 +103,8 @@ def load_config() -> Config:
         video_extensions=_parse_extensions(os.getenv("VIDEO_EXTENSIONS")),
         process_existing=_parse_bool(os.getenv("PROCESS_EXISTING"), False),
         dry_run=dry_run,
+        move_after_upload=move_after_upload,
+        archive_folder=archive_folder,
         uploads_db_path=uploads_db_path,
         web_port=web_port,
         sequence_start=sequence_start,

@@ -170,11 +170,15 @@ def _build_tags(hero: str, patch: str | None, item_names: list[str]) -> list[str
         base.append(item)
         base.append(f"{hero} {item}")
 
-    # Dedup and cap at 450-ish chars is handled by YouTube, but keep reasonable.
+    # Dedup and keep tags within YouTube limits.
+    # YouTube tags have a per-tag length limit; long tags can cause `invalidTags`.
     dedup: list[str] = []
     for t in base:
         tt = t.strip()
         if not tt:
+            continue
+        # Be conservative: drop tags longer than 30 chars.
+        if len(tt) > 30:
             continue
         if tt.lower() in (x.lower() for x in dedup):
             continue

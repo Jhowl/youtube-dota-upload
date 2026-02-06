@@ -13,6 +13,8 @@ venv/
 watch/
 data/
 
+# Local deploy/proxy config
+ginx/
 
 # OS
 .DS_Store

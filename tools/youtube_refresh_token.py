@@ -11,6 +11,31 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
+def _run_headless(flow: InstalledAppFlow) -> object:
+    """Headless OAuth helper.
+
+    Some versions of google-auth-oauthlib don't have `run_console`, so we implement
+    the console flow manually.
+    """
+    # Note: redirect_uri must match one allowed for InstalledAppFlow.
+    flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        include_granted_scopes="true",
+    )
+
+    print("\nOpen this URL in a browser and authorize the app:")
+    print(auth_url)
+    print("\nThen paste the authorization code here:")
+    code = input("Code: ").strip()
+    if not code:
+        raise RuntimeError("No code provided")
+
+    flow.fetch_token(code=code)
+    return flow.credentials
+
+
 def main() -> None:
     load_dotenv()
 
@@ -37,9 +62,8 @@ def main() -> None:
         }
         flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
 
-    port = int(os.getenv("YOUTUBE_OAUTH_PORT") or "8787")
-
-    creds = flow.run_local_server(host="localhost", port=port, prompt="consent")
+    # Headless-friendly OAuth flow:
+    creds = _run_headless(flow)
 
     refresh_token = getattr(creds, "refresh_token", None)
     if not refresh_token:

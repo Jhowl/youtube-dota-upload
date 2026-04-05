@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 from .config import Config
+from .youtube_auth import build_credentials, fetch_youtube_profile, refresh_and_capture_status
+from .store import update_youtube_account_status
 
 
 def upload_to_youtube(
@@ -18,17 +18,27 @@ def upload_to_youtube(
     description: str,
     tags: list[str] | None = None,
 ) -> str:
-    creds = Credentials(
-        token=None,
-        refresh_token=config.youtube_refresh_token,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=config.youtube_client_id,
-        client_secret=config.youtube_client_secret,
-        scopes=["https://www.googleapis.com/auth/youtube.upload"],
-    )
+    resolved, creds = build_credentials(config)
 
-    print("[upload] refreshing access token")
-    creds.refresh(Request())
+    print(f"[upload] refreshing access token ({resolved.source})")
+    refresh_and_capture_status(config, creds, resolved)
+
+    if resolved.account_id is not None:
+        try:
+            profile = fetch_youtube_profile(creds)
+            update_youtube_account_status(
+                config.uploads_db_path,
+                resolved.account_id,
+                channel_id=profile.channel_id,
+                channel_title=profile.channel_title,
+                google_account_email=profile.google_account_email,
+            )
+        except Exception as err:
+            update_youtube_account_status(
+                config.uploads_db_path,
+                resolved.account_id,
+                last_error=str(err),
+            )
 
     youtube = build("youtube", "v3", credentials=creds)
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import secrets
 import sqlite3
 from typing import Any
 
@@ -26,6 +27,35 @@ class UploadRecord:
     error: str | None
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class YouTubeAccountRecord:
+    id: int
+    provider: str
+    google_account_email: str | None
+    channel_id: str | None
+    channel_title: str | None
+    client_id: str
+    client_secret: str
+    refresh_token: str
+    scope: str | None
+    token_uri: str
+    active: int
+    last_refreshed_at: str | None
+    last_error: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class OAuthStateRecord:
+    id: int
+    state: str
+    provider: str
+    redirect_path: str | None
+    created_at: str
+    expires_at: str
 
 
 def _utc_now() -> str:
@@ -65,6 +95,43 @@ def init_db(db_path: Path) -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_status ON uploads(status)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                google_account_email TEXT,
+                channel_id TEXT,
+                channel_title TEXT,
+                client_id TEXT NOT NULL,
+                client_secret TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                scope TEXT,
+                token_uri TEXT NOT NULL DEFAULT 'https://oauth2.googleapis.com/token',
+                active INTEGER NOT NULL DEFAULT 1,
+                last_refreshed_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_youtube_accounts_active ON youtube_accounts(active)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                state TEXT NOT NULL UNIQUE,
+                provider TEXT NOT NULL,
+                redirect_path TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at)")
         _ensure_columns(conn)
 
 
@@ -87,6 +154,18 @@ def _row_to_record(row: sqlite3.Row | None) -> UploadRecord | None:
     if not row:
         return None
     return UploadRecord(**dict(row))
+
+
+def _row_to_youtube_account(row: sqlite3.Row | None) -> YouTubeAccountRecord | None:
+    if not row:
+        return None
+    return YouTubeAccountRecord(**dict(row))
+
+
+def _row_to_oauth_state(row: sqlite3.Row | None) -> OAuthStateRecord | None:
+    if not row:
+        return None
+    return OAuthStateRecord(**dict(row))
 
 
 def get_upload_by_path(db_path: Path, video_path: str) -> UploadRecord | None:
@@ -190,3 +269,168 @@ def set_status(
     if youtube_video_id is not None:
         fields["youtube_video_id"] = youtube_video_id
     return update_upload(db_path, upload_id, fields)
+
+
+def get_active_youtube_account(db_path: Path) -> YouTubeAccountRecord | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM youtube_accounts WHERE provider = 'youtube' AND active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    return _row_to_youtube_account(row)
+
+
+def upsert_youtube_account(
+    db_path: Path,
+    *,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    scope: str | None,
+    token_uri: str,
+    google_account_email: str | None,
+    channel_id: str | None,
+    channel_title: str | None,
+    last_refreshed_at: str | None = None,
+    last_error: str | None = None,
+) -> YouTubeAccountRecord:
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        conn.execute("UPDATE youtube_accounts SET active = 0, updated_at = ? WHERE provider = 'youtube'", (now,))
+        existing = conn.execute(
+            "SELECT * FROM youtube_accounts WHERE provider = 'youtube' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE youtube_accounts
+                SET google_account_email = ?, channel_id = ?, channel_title = ?, client_id = ?, client_secret = ?,
+                    refresh_token = ?, scope = ?, token_uri = ?, active = 1, last_refreshed_at = ?,
+                    last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    google_account_email,
+                    channel_id,
+                    channel_title,
+                    client_id,
+                    client_secret,
+                    refresh_token,
+                    scope,
+                    token_uri,
+                    last_refreshed_at,
+                    last_error,
+                    now,
+                    existing["id"],
+                ),
+            )
+            row = conn.execute("SELECT * FROM youtube_accounts WHERE id = ?", (existing["id"],)).fetchone()
+        else:
+            conn.execute(
+                """
+                INSERT INTO youtube_accounts (
+                    provider, google_account_email, channel_id, channel_title, client_id, client_secret,
+                    refresh_token, scope, token_uri, active, last_refreshed_at, last_error, created_at, updated_at
+                ) VALUES ('youtube', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (
+                    google_account_email,
+                    channel_id,
+                    channel_title,
+                    client_id,
+                    client_secret,
+                    refresh_token,
+                    scope,
+                    token_uri,
+                    last_refreshed_at,
+                    last_error,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM youtube_accounts WHERE provider = 'youtube' AND active = 1 ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+    account = _row_to_youtube_account(row)
+    if not account:
+        raise RuntimeError("Failed to store YouTube account")
+    return account
+
+
+def clear_active_youtube_account(db_path: Path) -> None:
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE youtube_accounts SET active = 0, updated_at = ? WHERE provider = 'youtube' AND active = 1",
+            (now,),
+        )
+
+
+def update_youtube_account_status(
+    db_path: Path,
+    account_id: int,
+    *,
+    last_refreshed_at: str | None = None,
+    last_error: str | None = None,
+    channel_id: str | None = None,
+    channel_title: str | None = None,
+    google_account_email: str | None = None,
+) -> YouTubeAccountRecord | None:
+    fields: dict[str, Any] = {}
+    if last_refreshed_at is not None:
+        fields["last_refreshed_at"] = last_refreshed_at
+    if last_error is not None:
+        fields["last_error"] = last_error
+    if channel_id is not None:
+        fields["channel_id"] = channel_id
+    if channel_title is not None:
+        fields["channel_title"] = channel_title
+    if google_account_email is not None:
+        fields["google_account_email"] = google_account_email
+    if not fields:
+        with _connect(db_path) as conn:
+            row = conn.execute("SELECT * FROM youtube_accounts WHERE id = ?", (account_id,)).fetchone()
+        return _row_to_youtube_account(row)
+
+    fields["updated_at"] = _utc_now()
+    sets = ", ".join([f"{k} = ?" for k in fields.keys()])
+    values = list(fields.values()) + [account_id]
+    with _connect(db_path) as conn:
+        conn.execute(f"UPDATE youtube_accounts SET {sets} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM youtube_accounts WHERE id = ?", (account_id,)).fetchone()
+    return _row_to_youtube_account(row)
+
+
+def cleanup_expired_oauth_states(db_path: Path) -> None:
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM oauth_states WHERE expires_at < ?", (now,))
+
+
+def create_oauth_state(db_path: Path, provider: str, redirect_path: str | None = None, ttl_minutes: int = 15) -> OAuthStateRecord:
+    cleanup_expired_oauth_states(db_path)
+    state = secrets.token_urlsafe(32)
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat().replace("+00:00", "Z")
+    expires_at = (now_dt + timedelta(minutes=ttl_minutes)).isoformat().replace("+00:00", "Z")
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO oauth_states (state, provider, redirect_path, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            (state, provider, redirect_path, now, expires_at),
+        )
+        row = conn.execute("SELECT * FROM oauth_states WHERE state = ?", (state,)).fetchone()
+    rec = _row_to_oauth_state(row)
+    if not rec:
+        raise RuntimeError("Failed to create oauth state")
+    return rec
+
+
+def consume_oauth_state(db_path: Path, state: str, provider: str) -> OAuthStateRecord | None:
+    cleanup_expired_oauth_states(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM oauth_states WHERE state = ? AND provider = ?",
+            (state, provider),
+        ).fetchone()
+        if row:
+            conn.execute("DELETE FROM oauth_states WHERE id = ?", (row["id"],))
+    return _row_to_oauth_state(row)

@@ -95,8 +95,8 @@ def load_config() -> Config:
             raise RuntimeError("Missing YOUTUBE_CLIENT_ID (or set DRY_RUN=true)")
         if not youtube_client_secret:
             raise RuntimeError("Missing YOUTUBE_CLIENT_SECRET (or set DRY_RUN=true)")
-        if not youtube_refresh_token:
-            raise RuntimeError("Missing YOUTUBE_REFRESH_TOKEN (or set DRY_RUN=true)")
+        # Refresh token can now come from the web OAuth flow and be stored in SQLite.
+        # Keep env support as fallback, but do not require it at startup.
 
     return Config(
         watch_folder=watch_folder,

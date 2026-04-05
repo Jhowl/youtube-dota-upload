@@ -132,17 +132,40 @@ docker run --rm -it `
 
 ## Dashboard
 
-Open the local dashboard to edit metadata and manually upload:
+Open the local dashboard to edit metadata, manage the queue, and connect YouTube:
 
 - `http://localhost:4321`
+
+Dashboard features now include:
+
+- queue overview cards
+- filter/search workflow
+- compact video management table
+- detail editor panel for the selected video
+- YouTube connection status panel
 
 Each queued video includes:
 
 - Title (ends with `#<sequence>`)
 - Description
 - Tags (comma separated)
+- Thumbnail prompt
 
 Click **Save** to store edits, then **Upload** to send to YouTube.
+
+## Connect YouTube in the Website
+
+You can now connect YouTube directly from the dashboard.
+
+1. Create a Google OAuth **Web application** client
+2. Add an authorized redirect URI like:
+   - `http://localhost:4321/api/youtube/connect/callback`
+   - or your reverse-proxied/public URL equivalent
+3. Set `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET` in `.env`
+4. Open the dashboard and click **Connect YouTube**
+
+The app stores the refresh token in its SQLite data store and uses it for future uploads.
+`YOUTUBE_REFRESH_TOKEN` remains supported as a fallback for older/manual setups.
 
 ## Docker Compose (recommended for auto-start)
 

@@ -4,17 +4,26 @@ import asyncio
 import queue
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import Config
 from .event_bus import EVENT_BUS
 from .process_video import apply_sequence_to_title
-from .store import UploadRecord, get_upload
+from .store import UploadRecord, clear_active_youtube_account, consume_oauth_state, get_active_youtube_account, get_upload
 from .uploads import list_records, skip_upload, start_upload, update_record
+from .youtube_auth import (
+    YouTubeAuthError,
+    YouTubeOAuthConfigError,
+    begin_youtube_oauth,
+    build_credentials,
+    fetch_youtube_profile,
+    refresh_and_capture_status,
+)
 
 
 class UpdatePayload(BaseModel):
@@ -24,10 +33,17 @@ class UpdatePayload(BaseModel):
     sequence: int | None = None
 
 
+class OAuthStartPayload(BaseModel):
+    redirect_path: str | None = "/"
+
+
 def _record_to_dict(record: UploadRecord) -> dict[str, Any]:
+    filename = Path(record.video_path).name
+    youtube_url = f"https://www.youtube.com/watch?v={record.youtube_video_id}" if record.youtube_video_id else None
     return {
         "id": record.id,
         "video_path": record.video_path,
+        "filename": filename,
         "status": record.status,
         "sequence": record.sequence,
         "title": record.edited_title or record.default_title or "",
@@ -40,9 +56,59 @@ def _record_to_dict(record: UploadRecord) -> dict[str, Any]:
         "description_path": record.description_path,
         "match_id": record.match_id,
         "youtube_video_id": record.youtube_video_id,
+        "youtube_url": youtube_url,
         "error": record.error,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+    }
+
+
+def _build_base_url(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
+
+
+def _youtube_status(config: Config) -> dict[str, Any]:
+    active = get_active_youtube_account(config.uploads_db_path)
+    fallback_ready = bool(config.youtube_client_id and config.youtube_client_secret and config.youtube_refresh_token)
+
+    if active:
+        return {
+            "connected": True,
+            "source": "db",
+            "channel_title": active.channel_title,
+            "channel_id": active.channel_id,
+            "google_account_email": active.google_account_email,
+            "token_status": "ok" if not active.last_error else "error",
+            "last_refreshed_at": active.last_refreshed_at,
+            "error": active.last_error or None,
+            "has_env_fallback": fallback_ready,
+        }
+
+    if fallback_ready:
+        return {
+            "connected": True,
+            "source": "env",
+            "channel_title": None,
+            "channel_id": None,
+            "google_account_email": None,
+            "token_status": "fallback",
+            "last_refreshed_at": None,
+            "error": None,
+            "has_env_fallback": True,
+        }
+
+    return {
+        "connected": False,
+        "source": None,
+        "channel_title": None,
+        "channel_id": None,
+        "google_account_email": None,
+        "token_status": "missing",
+        "last_refreshed_at": None,
+        "error": None,
+        "has_env_fallback": False,
     }
 
 
@@ -102,6 +168,69 @@ def create_app(config: Config) -> FastAPI:
         if not record:
             raise HTTPException(status_code=404, detail="Upload not found")
         return _record_to_dict(record)
+
+    @app.get("/api/youtube/status")
+    def youtube_status() -> dict[str, Any]:
+        return _youtube_status(config)
+
+    @app.post("/api/youtube/connect/start")
+    def youtube_connect_start(payload: OAuthStartPayload, request: Request) -> dict[str, Any]:
+        try:
+            auth_url = begin_youtube_oauth(config, _build_base_url(request), payload.redirect_path)
+        except YouTubeOAuthConfigError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
+        return {"auth_url": auth_url}
+
+    @app.get("/api/youtube/connect/callback")
+    def youtube_connect_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+        redirect_target = "/"
+        if state:
+            consumed = consume_oauth_state(config.uploads_db_path, state, "youtube")
+            if consumed and consumed.redirect_path:
+                redirect_target = consumed.redirect_path
+            elif not consumed:
+                redirect_target = "/?youtube=error&message=Invalid+or+expired+state"
+                return RedirectResponse(redirect_target, status_code=303)
+
+        if error:
+            q = urlencode({"youtube": "error", "message": error})
+            return RedirectResponse(f"{redirect_target}?{q}" if "?" not in redirect_target else f"{redirect_target}&{q}", status_code=303)
+        if not code:
+            q = urlencode({"youtube": "error", "message": "Missing authorization code"})
+            return RedirectResponse(f"{redirect_target}?{q}" if "?" not in redirect_target else f"{redirect_target}&{q}", status_code=303)
+
+        try:
+            from .youtube_auth import finish_youtube_oauth
+
+            finish_youtube_oauth(config, base_url=_build_base_url(request), code=code)
+            q = urlencode({"youtube": "connected"})
+        except Exception as err:
+            q = urlencode({"youtube": "error", "message": str(err)})
+
+        return RedirectResponse(f"{redirect_target}?{q}" if "?" not in redirect_target else f"{redirect_target}&{q}", status_code=303)
+
+    @app.post("/api/youtube/disconnect")
+    def youtube_disconnect() -> dict[str, Any]:
+        clear_active_youtube_account(config.uploads_db_path)
+        return {"ok": True}
+
+    @app.post("/api/youtube/refresh-test")
+    def youtube_refresh_test() -> dict[str, Any]:
+        try:
+            resolved, creds = build_credentials(config)
+            refresh_and_capture_status(config, creds, resolved)
+            profile = fetch_youtube_profile(creds)
+            return {
+                "ok": True,
+                "source": resolved.source,
+                "channel_id": profile.channel_id,
+                "channel_title": profile.channel_title,
+                "google_account_email": profile.google_account_email,
+            }
+        except YouTubeAuthError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
+        except Exception as err:
+            raise HTTPException(status_code=500, detail=str(err)) from err
 
     @app.get("/api/events")
     async def events() -> StreamingResponse:

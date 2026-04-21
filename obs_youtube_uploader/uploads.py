@@ -9,13 +9,15 @@ from typing import Any
 
 from .config import Config
 from .event_bus import EVENT_BUS
-from .process_video import build_defaults, perform_upload, apply_sequence_to_title
+from .process_video import apply_sequence_to_title, build_defaults, perform_upload
 from .store import (
     UploadRecord,
     create_upload,
+    delete_upload,
     get_next_sequence,
     get_upload,
     list_uploads,
+    resequence_uploads,
     set_status,
     update_upload,
 )
@@ -88,6 +90,26 @@ def skip_upload(config: Config, upload_id: int) -> UploadRecord | None:
     if record:
         EVENT_BUS.publish("upload_updated", record_to_event(record))
     return record
+
+
+def delete_record(config: Config, upload_id: int) -> bool:
+    record = get_upload(config.uploads_db_path, upload_id)
+    if not record:
+        return False
+    ok = delete_upload(config.uploads_db_path, upload_id)
+    if ok:
+        EVENT_BUS.publish(
+            "upload_deleted",
+            {"id": upload_id, "video_path": record.video_path, "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+    return ok
+
+
+def recalculate_sequences(config: Config) -> list[UploadRecord]:
+    records = resequence_uploads(config.uploads_db_path, config.sequence_start)
+    for record in records[:50]:
+        EVENT_BUS.publish("upload_updated", record_to_event(record))
+    return records
 
 
 def list_records(config: Config) -> list[UploadRecord]:
@@ -164,7 +186,6 @@ def _do_upload(config: Config, upload_id: int) -> None:
         if updated is not None:
             EVENT_BUS.publish("upload_updated", record_to_event(updated))
 
-        # Optional: archive files after successful upload.
         if config.move_after_upload:
             try:
                 config.archive_folder.mkdir(parents=True, exist_ok=True)
@@ -191,7 +212,6 @@ def _do_upload(config: Config, upload_id: int) -> None:
                     if moved is not None:
                         EVENT_BUS.publish("upload_updated", record_to_event(moved))
             except Exception as move_err:
-                # Don't fail the upload just because archiving failed.
                 print(f"[uploads] warning: failed to archive files: {move_err}")
     except Exception as err:
         updated = set_status(

@@ -6,20 +6,30 @@ const statusFiltersEl = document.getElementById("status-filters");
 const detailPanelEl = document.getElementById("detail-panel");
 const youtubePanelEl = document.getElementById("youtube-panel");
 const flashEl = document.getElementById("flash");
+const youtubeNavBtn = document.getElementById("youtube-nav-btn");
+const tableCountEl = document.getElementById("table-count");
+
+const summaryEls = {
+  pending: document.getElementById("summary-pending"),
+  uploading: document.getElementById("summary-uploading"),
+  error: document.getElementById("summary-error"),
+  uploaded: document.getElementById("summary-uploaded"),
+};
 
 let videos = [];
 let selectedId = null;
 let currentFilter = "all";
 let youtubeStatus = null;
 let flashTimer = null;
+let detailCache = new Map();
 
 const statusLabels = {
+  all: "All",
   pending: "Pending",
   uploading: "Uploading",
   uploaded: "Uploaded",
   error: "Error",
   skipped: "Skipped",
-  all: "All",
 };
 
 const statusOrder = ["all", "pending", "uploading", "error", "uploaded", "skipped"];
@@ -48,6 +58,15 @@ const formatDate = (value) => {
   return d.toLocaleString();
 };
 
+const getCounts = () =>
+  videos.reduce(
+    (acc, item) => {
+      acc[item.status] = (acc[item.status] || 0) + 1;
+      return acc;
+    },
+    { pending: 0, uploading: 0, uploaded: 0, error: 0, skipped: 0 }
+  );
+
 const selectedVideo = () => videos.find((video) => video.id === selectedId) || null;
 
 const filteredVideos = () => {
@@ -63,21 +82,17 @@ const filteredVideos = () => {
   });
 };
 
-const updateStats = () => {
-  const counts = videos.reduce(
-    (acc, item) => {
-      acc[item.status] = (acc[item.status] || 0) + 1;
-      return acc;
-    },
-    { pending: 0, uploading: 0, uploaded: 0, error: 0, skipped: 0 }
-  );
-
+const renderStats = () => {
+  const counts = getCounts();
   statsEl.innerHTML = "";
   ["pending", "uploading", "error", "uploaded", "skipped"].forEach((status) => {
-    const div = document.createElement("div");
-    div.className = "stat";
-    div.innerHTML = `<strong>${counts[status] || 0}</strong><span>${statusLabels[status]}</span>`;
-    statsEl.appendChild(div);
+    const tile = document.createElement("div");
+    tile.className = "stat-tile";
+    tile.innerHTML = `<span>${statusLabels[status]}</span><strong>${counts[status] || 0}</strong>`;
+    statsEl.appendChild(tile);
+  });
+  Object.entries(summaryEls).forEach(([status, el]) => {
+    if (el) el.textContent = String(counts[status] || 0);
   });
 };
 
@@ -95,62 +110,77 @@ const renderStatusFilters = () => {
   });
 };
 
-const renderTable = () => {
+const fetchVideoDetail = async (id) => {
+  if (detailCache.has(id)) return detailCache.get(id);
+  const res = await fetch(`/api/videos/${id}`);
+  const data = await res.json();
+  detailCache.set(id, data);
+  return data;
+};
+
+const invalidateDetail = (id) => {
+  if (id) detailCache.delete(id);
+};
+
+const renderList = () => {
   const rows = filteredVideos();
   listEl.innerHTML = "";
+  tableCountEl.textContent = `${rows.length} video${rows.length === 1 ? "" : "s"}`;
 
   if (!rows.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="7"><div class="empty-state small">No matching videos right now.</div></td>`;
-    listEl.appendChild(tr);
+    listEl.innerHTML = '<div class="empty-state">No matching videos right now.</div>';
     return;
   }
 
   rows.forEach((video) => {
-    const tr = document.createElement("tr");
-    tr.className = selectedId === video.id ? "selected" : "";
-    tr.innerHTML = `
-      <td><span class="status ${video.status}">${statusLabels[video.status] || video.status}</span></td>
-      <td class="mono">${video.sequence ?? "-"}</td>
-      <td>
-        <div class="primary-cell">${video.filename || "-"}</div>
-        <div class="secondary-cell mono">${video.video_path}</div>
-      </td>
-      <td>${video.title || "-"}</td>
-      <td class="mono">${video.match_id ?? "-"}</td>
-      <td>${formatDate(video.updated_at)}</td>
-      <td>
+    const row = document.createElement("div");
+    row.className = `video-row ${selectedId === video.id ? "selected" : ""}`;
+    row.innerHTML = `
+      <div class="video-stack">
+        <span class="status ${video.status}">${statusLabels[video.status] || video.status}</span>
+        <div class="video-stack-meta">
+          <div class="video-seq">#${video.sequence ?? "-"}</div>
+          <div class="video-match">Match ${video.match_id ?? "-"}</div>
+        </div>
+      </div>
+      <div class="video-main">
+        <div class="video-row-title">${video.filename || "Unnamed video"}</div>
+        <div class="video-row-sub">${video.title || "No title yet"}</div>
+        <div class="video-row-sub">${video.video_path || ""}</div>
+      </div>
+      <div>
         <div class="row-actions">
           <button class="btn subtle btn-xs" data-action="review">Review</button>
           <button class="btn btn-xs" data-action="upload" ${["uploading", "uploaded", "skipped"].includes(video.status) ? "disabled" : ""}>Upload</button>
           <button class="btn ghost btn-xs" data-action="skip" ${["uploaded", "skipped"].includes(video.status) ? "disabled" : ""}>Skip</button>
         </div>
-      </td>
+      </div>
     `;
 
-    tr.addEventListener("click", (event) => {
+    row.addEventListener("click", async (event) => {
       if (event.target.closest("button")) return;
       selectedId = video.id;
       render();
     });
 
-    tr.querySelector('[data-action="review"]').onclick = () => {
+    row.querySelector('[data-action="review"]').onclick = async () => {
       selectedId = video.id;
       render();
     };
 
-    tr.querySelector('[data-action="upload"]').onclick = async () => {
+    row.querySelector('[data-action="upload"]').onclick = async () => {
       await post(`/api/videos/${video.id}/upload`);
       showFlash(`Upload started for ${video.filename}`);
     };
 
-    tr.querySelector('[data-action="skip"]').onclick = async () => {
+    row.querySelector('[data-action="skip"]').onclick = async () => {
       await post(`/api/videos/${video.id}/skip`);
+      invalidateDetail(video.id);
       showFlash(`Skipped ${video.filename}`);
       await fetchVideos();
     };
 
-    listEl.appendChild(tr);
+    listEl.appendChild(row);
   });
 };
 
@@ -168,26 +198,30 @@ const createField = (labelText, type) => {
 const renderDetail = () => {
   const video = selectedVideo();
   if (!video) {
-    detailPanelEl.innerHTML = '<div class="empty-state">Select a video to review and edit.</div>';
+    detailPanelEl.innerHTML = '<div class="empty-state">Select a video from the list to manage it.</div>';
     return;
   }
 
+  detailPanelEl.scrollTop = 0;
   detailPanelEl.innerHTML = "";
 
   const top = document.createElement("div");
   top.className = "detail-top";
   top.innerHTML = `
     <div>
-      <div class="section-title">Review Video</div>
+      <div class="eyebrow">Focused Editor</div>
       <div class="detail-title">${video.filename}</div>
       <div class="meta-row mono">
         <span>ID ${video.id}</span>
         <span>Match ${video.match_id ?? "-"}</span>
-        <span>${formatDate(video.updated_at)}</span>
+        <span>Updated ${formatDate(video.updated_at)}</span>
       </div>
     </div>
     <span class="status ${video.status}">${statusLabels[video.status] || video.status}</span>
   `;
+
+  const layout = document.createElement("div");
+  layout.className = "editor-layout";
 
   const form = document.createElement("div");
   form.className = "detail-form";
@@ -200,15 +234,16 @@ const renderDetail = () => {
   seqField.control.min = "1";
   seqField.control.value = video.sequence ?? "";
 
+  const matchField = createField("Match ID", "input");
+  matchField.control.type = "number";
+  matchField.control.min = "1";
+  matchField.control.value = video.match_id ?? "";
+
   const tagsField = createField("Tags", "input");
   tagsField.control.value = video.tags || "";
 
   const descField = createField("Description", "textarea");
   descField.control.value = video.description || "";
-
-  const promptField = createField("Thumbnail Prompt", "textarea");
-  promptField.control.value = video.thumbnail_prompt || "";
-  promptField.control.readOnly = true;
 
   seqField.control.addEventListener("input", () => {
     const seqValue = Number(seqField.control.value);
@@ -217,18 +252,19 @@ const renderDetail = () => {
     }
   });
 
-  [titleField.field, seqField.field, tagsField.field, descField.field, promptField.field].forEach((el) => form.appendChild(el));
+  [titleField.field, seqField.field, matchField.field, tagsField.field, descField.field].forEach((el) => form.appendChild(el));
 
   const actions = document.createElement("div");
-  actions.className = "actions";
+  actions.className = "actions sticky-toolbar";
   actions.innerHTML = `
-    <button class="btn subtle">Save</button>
-    <button class="btn" ${["uploading", "uploaded", "skipped"].includes(video.status) ? "disabled" : ""}>Upload</button>
+    <button class="btn subtle">Save Changes</button>
+    <button class="btn" ${["uploading", "uploaded", "skipped"].includes(video.status) ? "disabled" : ""}>Upload Video</button>
     <button class="btn ghost" ${["uploaded", "skipped"].includes(video.status) ? "disabled" : ""}>Skip</button>
-    <button class="btn ghost">Copy Prompt</button>
+    <button class="btn danger">Delete</button>
+    <button class="btn ghost">Recalculate Numbers</button>
   `;
 
-  const [saveBtn, uploadBtn, skipBtn, copyBtn] = actions.querySelectorAll("button");
+  const [saveBtn, uploadBtn, skipBtn, deleteBtn, reseqBtn] = actions.querySelectorAll("button");
 
   saveBtn.onclick = async () => {
     await patchVideo(video.id, {
@@ -236,7 +272,9 @@ const renderDetail = () => {
       description: descField.control.value,
       tags: tagsField.control.value,
       sequence: Number(seqField.control.value) || null,
+      match_id: Number(matchField.control.value) || null,
     });
+    invalidateDetail(video.id);
     showFlash(`Saved changes for ${video.filename}`);
     await fetchVideos();
   };
@@ -248,20 +286,65 @@ const renderDetail = () => {
 
   skipBtn.onclick = async () => {
     await post(`/api/videos/${video.id}/skip`);
+    invalidateDetail(video.id);
     showFlash(`Skipped ${video.filename}`);
     await fetchVideos();
   };
 
-  copyBtn.onclick = async () => {
-    if (navigator.clipboard && promptField.control.value) {
-      await navigator.clipboard.writeText(promptField.control.value);
-      showFlash("Thumbnail prompt copied");
-    }
+  deleteBtn.onclick = async () => {
+    await fetch(`/api/videos/${video.id}`, { method: "DELETE" });
+    invalidateDetail(video.id);
+    selectedId = null;
+    showFlash(`Deleted record for ${video.filename}`);
+    await fetchVideos();
   };
 
+  reseqBtn.onclick = async () => {
+    await post('/api/videos/resequence');
+    detailCache.clear();
+    showFlash('Recalculated video sequence numbers');
+    await fetchVideos();
+  };
+
+  form.appendChild(actions);
+
+  const side = document.createElement('div');
+  side.className = 'side-panels';
+
+  const promptPanel = document.createElement('div');
+  promptPanel.className = 'info-panel';
+  promptPanel.innerHTML = `<div class="section-subtitle">Thumbnail Prompt</div><div class="section-helper">Copy and use this for thumbnail generation.</div>`;
+  const promptBox = document.createElement('div');
+  promptBox.className = 'raw-box';
+  promptBox.textContent = video.thumbnail_prompt || 'No prompt available';
+  const copyPromptBtn = document.createElement('button');
+  copyPromptBtn.className = 'btn ghost';
+  copyPromptBtn.textContent = 'Copy Prompt';
+  copyPromptBtn.onclick = async () => {
+    if (navigator.clipboard && video.thumbnail_prompt) {
+      await navigator.clipboard.writeText(video.thumbnail_prompt);
+      showFlash('Thumbnail prompt copied');
+    }
+  };
+  promptPanel.appendChild(promptBox);
+  promptPanel.appendChild(copyPromptBtn);
+
+  const rawPanel = document.createElement('div');
+  rawPanel.className = 'info-panel';
+  rawPanel.innerHTML = `<div class="section-subtitle">OpenDota Raw Data</div><div class="section-helper">Raw match payload for debugging and metadata checks.</div>`;
+  const rawBox = document.createElement('div');
+  rawBox.className = 'raw-box';
+  rawBox.textContent = 'Loading raw match data…';
+  rawPanel.appendChild(rawBox);
+
+  side.appendChild(promptPanel);
+  side.appendChild(rawPanel);
+
+  layout.appendChild(form);
+  layout.appendChild(side);
+
   detailPanelEl.appendChild(top);
-  detailPanelEl.appendChild(form);
-  detailPanelEl.appendChild(actions);
+  detailPanelEl.appendChild(layout);
 
   if (video.youtube_url) {
     const youtubeLink = document.createElement("a");
@@ -269,7 +352,7 @@ const renderDetail = () => {
     youtubeLink.href = video.youtube_url;
     youtubeLink.target = "_blank";
     youtubeLink.rel = "noreferrer";
-    youtubeLink.textContent = `Open YouTube video → ${video.youtube_video_id}`;
+    youtubeLink.textContent = `Open uploaded YouTube video → ${video.youtube_video_id}`;
     detailPanelEl.appendChild(youtubeLink);
   }
 
@@ -279,27 +362,31 @@ const renderDetail = () => {
     errorBox.textContent = video.error;
     detailPanelEl.appendChild(errorBox);
   }
+
+  fetchVideoDetail(video.id)
+    .then((detail) => {
+      if (selectedId !== video.id) return;
+      rawBox.textContent = detail.opendota_match_raw
+        ? JSON.stringify(detail.opendota_match_raw, null, 2)
+        : (detail.opendota_match_raw_error || 'No raw OpenDota data available');
+    })
+    .catch((err) => {
+      if (selectedId !== video.id) return;
+      rawBox.textContent = `Failed to load raw data: ${err.message || err}`;
+    });
 };
 
 const renderYoutubePanel = () => {
   youtubePanelEl.innerHTML = "";
   const status = youtubeStatus || { connected: false, token_status: "missing" };
-  const wrap = document.createElement("div");
-  wrap.innerHTML = `
-    <div class="section-title">YouTube Connection</div>
-    <div class="youtube-status-row">
-      <div>
-        <div class="detail-title">${status.connected ? (status.channel_title || "Connected") : "Not connected"}</div>
-        <div class="muted-line">
-          ${status.google_account_email || "Connect your channel in the browser so uploads can refresh automatically."}
-        </div>
-        <div class="meta-row mono compact">
-          <span>Source: ${status.source || "none"}</span>
-          <span>Status: ${status.token_status || "missing"}</span>
-          <span>${status.last_refreshed_at ? `Last refresh ${formatDate(status.last_refreshed_at)}` : "No refresh yet"}</span>
-        </div>
-      </div>
-      <span class="status ${status.connected ? "uploaded" : "skipped"}">${status.connected ? "Connected" : "Missing"}</span>
+
+  youtubePanelEl.innerHTML = `
+    <div class="sidebar-title">YouTube</div>
+    <div class="detail-title">${status.connected ? (status.channel_title || "Connected") : "Not connected"}</div>
+    <div class="youtube-subtext">${status.google_account_email || "Generate the Google login link here, approve it, then paste the authorization code below."}</div>
+    <div class="meta-row mono">
+      <span>Source: ${status.source || "none"}</span>
+      <span>Status: ${status.token_status || "missing"}</span>
     </div>
   `;
 
@@ -308,25 +395,54 @@ const renderYoutubePanel = () => {
 
   const connectBtn = document.createElement("button");
   connectBtn.className = "btn";
-  connectBtn.textContent = status.connected ? "Reconnect YouTube" : "Connect YouTube";
+  connectBtn.textContent = status.connected ? "Generate New Login Link" : "Generate Login Link";
   connectBtn.onclick = async () => {
-    const res = await post("/api/youtube/connect/start", { redirect_path: "/" });
-    if (res.auth_url) window.location.href = res.auth_url;
+    const res = await post("/api/youtube/login-link");
+    if (res.auth_url) {
+      window.open(res.auth_url, "_blank", "noopener,noreferrer");
+      showFlash("Opened Google login page. After approval, paste the returned code below.");
+    }
   };
-
-  const testBtn = document.createElement("button");
-  testBtn.className = "btn subtle";
-  testBtn.textContent = "Test Refresh";
-  testBtn.onclick = async () => {
-    const res = await post("/api/youtube/refresh-test");
-    showFlash(`Connected to ${res.channel_title || res.google_account_email || res.source}`);
-    await fetchYoutubeStatus();
-  };
-
   actions.appendChild(connectBtn);
 
+  const legacyWrap = document.createElement("div");
+  legacyWrap.className = "field";
+  const legacyLabel = document.createElement("label");
+  legacyLabel.textContent = "Paste authorization code";
+  const legacyInput = document.createElement("textarea");
+  legacyInput.placeholder = "Paste the Google authorization code here";
+  legacyInput.style.minHeight = "90px";
+  const legacySubmit = document.createElement("button");
+  legacySubmit.className = "btn subtle";
+  legacySubmit.textContent = "Save Login";
+  legacySubmit.onclick = async () => {
+    const code = legacyInput.value.trim();
+    if (!code) {
+      showFlash("Paste the authorization code first.", true);
+      return;
+    }
+    const res = await post("/api/youtube/login-complete", { code });
+    showFlash(`YouTube connected: ${res.channel_title || res.google_account_email || "ok"}`);
+    legacyInput.value = "";
+    await fetchYoutubeStatus();
+  };
+  legacyWrap.appendChild(legacyLabel);
+  legacyWrap.appendChild(legacyInput);
+  youtubePanelEl.appendChild(actions);
+  youtubePanelEl.appendChild(legacyWrap);
+  youtubePanelEl.appendChild(legacySubmit);
+
   if (status.connected) {
+    const testBtn = document.createElement("button");
+    testBtn.className = "btn subtle";
+    testBtn.textContent = "Test Connection";
+    testBtn.onclick = async () => {
+      const res = await post("/api/youtube/refresh-test");
+      showFlash(`Connected to ${res.channel_title || res.google_account_email || res.source}`);
+      await fetchYoutubeStatus();
+    };
     actions.appendChild(testBtn);
+
     const disconnectBtn = document.createElement("button");
     disconnectBtn.className = "btn ghost";
     disconnectBtn.textContent = "Disconnect";
@@ -338,20 +454,16 @@ const renderYoutubePanel = () => {
     actions.appendChild(disconnectBtn);
   }
 
-  wrap.appendChild(actions);
-
   if (status.error) {
     const errorBox = document.createElement("div");
     errorBox.className = "error-box";
     errorBox.textContent = status.error;
-    wrap.appendChild(errorBox);
+    youtubePanelEl.appendChild(errorBox);
   }
-
-  youtubePanelEl.appendChild(wrap);
 };
 
 const render = () => {
-  updateStats();
+  renderStats();
   renderStatusFilters();
   renderYoutubePanel();
 
@@ -360,7 +472,7 @@ const render = () => {
     selectedId = rows[0].id;
   }
 
-  renderTable();
+  renderList();
   renderDetail();
 };
 
@@ -411,24 +523,17 @@ const initEvents = () => {
   };
 };
 
-const handleQueryFeedback = () => {
-  const params = new URLSearchParams(window.location.search);
-  const youtube = params.get("youtube");
-  const message = params.get("message");
-  if (youtube === "connected") showFlash("YouTube connected successfully.");
-  if (youtube === "error") showFlash(message || "YouTube connection failed.", true);
-  if (youtube) {
-    const cleanUrl = `${window.location.pathname}`;
-    window.history.replaceState({}, "", cleanUrl);
-  }
-};
-
 refreshBtn.addEventListener("click", async () => {
+  detailCache.clear();
   await Promise.all([fetchVideos(), fetchYoutubeStatus()]);
   showFlash("Dashboard refreshed");
 });
-searchInput.addEventListener("input", renderTable);
-searchInput.addEventListener("input", renderDetail);
 
-Promise.all([fetchVideos(), fetchYoutubeStatus()]).then(handleQueryFeedback);
+searchInput.addEventListener("input", render);
+
+youtubeNavBtn?.addEventListener("click", () => {
+  youtubePanelEl.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+Promise.all([fetchVideos(), fetchYoutubeStatus()]);
 initEvents();

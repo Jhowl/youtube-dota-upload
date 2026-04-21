@@ -1,24 +1,21 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 from googleapiclient.discovery import build
 
 from .config import Config
 from .store import (
     YouTubeAccountRecord,
-    create_oauth_state,
     get_active_youtube_account,
     update_youtube_account_status,
     upsert_youtube_account,
 )
 
-YOUTUBE_PROVIDER = "youtube"
 YOUTUBE_SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube",
@@ -27,6 +24,7 @@ YOUTUBE_SCOPES = [
 ]
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 
 
 @dataclass(frozen=True)
@@ -64,26 +62,25 @@ def _env_scopes() -> list[str]:
     return YOUTUBE_SCOPES
 
 
-def _build_client_config(client_id: str, client_secret: str, redirect_uri: str) -> dict[str, Any]:
-    return {
-        "web": {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "auth_uri": AUTH_URI,
-            "token_uri": TOKEN_URI,
-            "redirect_uris": [redirect_uri],
-        }
-    }
-
-
 def _oauth_client_values(config: Config) -> tuple[str, str]:
     client_id = (config.youtube_client_id or "").strip()
     client_secret = (config.youtube_client_secret or "").strip()
     if not client_id or not client_secret:
         raise YouTubeOAuthConfigError(
-            "Missing YOUTUBE_CLIENT_ID/YOUTUBE_CLIENT_SECRET. Add a Google Web OAuth client in .env first."
+            "Missing YOUTUBE_CLIENT_ID/YOUTUBE_CLIENT_SECRET in .env"
         )
     return client_id, client_secret
+
+
+def _installed_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
+    return {
+        "installed": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": AUTH_URI,
+            "token_uri": TOKEN_URI,
+        }
+    }
 
 
 def resolve_youtube_credentials(config: Config) -> ResolvedYouTubeCredentials:
@@ -165,42 +162,38 @@ def fetch_youtube_profile(creds: Credentials) -> YouTubeProfile:
     return YouTubeProfile(channel_id=channel_id, channel_title=channel_title, google_account_email=google_email)
 
 
-def begin_youtube_oauth(config: Config, base_url: str, redirect_path: str | None = None) -> str:
+def begin_legacy_youtube_oauth(config: Config) -> str:
     client_id, client_secret = _oauth_client_values(config)
-    callback_url = f"{base_url.rstrip('/')}/api/youtube/connect/callback"
-    state_record = create_oauth_state(config.uploads_db_path, YOUTUBE_PROVIDER, redirect_path=redirect_path)
-    flow = Flow.from_client_config(
-        _build_client_config(client_id, client_secret, callback_url),
-        scopes=YOUTUBE_SCOPES,
+    flow = InstalledAppFlow.from_client_config(
+        _installed_client_config(client_id, client_secret),
+        YOUTUBE_SCOPES,
     )
-    flow.redirect_uri = callback_url
+    flow.redirect_uri = OOB_REDIRECT_URI
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         prompt="consent",
         include_granted_scopes="true",
-        state=state_record.state,
     )
     return auth_url
 
 
-def finish_youtube_oauth(config: Config, *, base_url: str, code: str) -> YouTubeAccountRecord:
+def finish_legacy_youtube_oauth(config: Config, code: str) -> YouTubeAccountRecord:
     client_id, client_secret = _oauth_client_values(config)
-    callback_url = f"{base_url.rstrip('/')}/api/youtube/connect/callback"
-    flow = Flow.from_client_config(
-        _build_client_config(client_id, client_secret, callback_url),
-        scopes=YOUTUBE_SCOPES,
+    flow = InstalledAppFlow.from_client_config(
+        _installed_client_config(client_id, client_secret),
+        YOUTUBE_SCOPES,
     )
-    flow.redirect_uri = callback_url
+    flow.redirect_uri = OOB_REDIRECT_URI
     flow.fetch_token(code=code)
     creds = flow.credentials
     refresh_token = getattr(creds, "refresh_token", None)
     if not refresh_token:
         raise YouTubeAuthError(
-            "Google did not return a refresh token. Reconnect with consent or revoke previous access and try again."
+            "No refresh token returned. Revoke the app in your Google account and try again."
         )
 
     profile = fetch_youtube_profile(creds)
-    account = upsert_youtube_account(
+    return upsert_youtube_account(
         config.uploads_db_path,
         client_id=client_id,
         client_secret=client_secret,
@@ -213,4 +206,3 @@ def finish_youtube_oauth(config: Config, *, base_url: str, code: str) -> YouTube
         last_refreshed_at=creds.expiry.isoformat().replace("+00:00", "Z") if creds.expiry else None,
         last_error="",
     )
-    return account

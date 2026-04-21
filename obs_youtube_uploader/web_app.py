@@ -4,24 +4,32 @@ import asyncio
 import queue
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import Config
 from .event_bus import EVENT_BUS
-from .process_video import apply_sequence_to_title
-from .store import UploadRecord, clear_active_youtube_account, consume_oauth_state, get_active_youtube_account, get_upload
-from .uploads import list_records, skip_upload, start_upload, update_record
+from .opendota import fetch_match
+from .process_video import apply_sequence_to_title, rebuild_defaults_for_match_id
+from .store import UploadRecord, clear_active_youtube_account, get_active_youtube_account, get_upload
+from .uploads import (
+    delete_record,
+    list_records,
+    recalculate_sequences,
+    skip_upload,
+    start_upload,
+    update_record,
+)
 from .youtube_auth import (
     YouTubeAuthError,
     YouTubeOAuthConfigError,
-    begin_youtube_oauth,
+    begin_legacy_youtube_oauth,
     build_credentials,
     fetch_youtube_profile,
+    finish_legacy_youtube_oauth,
     refresh_and_capture_status,
 )
 
@@ -31,10 +39,11 @@ class UpdatePayload(BaseModel):
     description: str | None = None
     tags: str | None = None
     sequence: int | None = None
+    match_id: int | None = None
 
 
-class OAuthStartPayload(BaseModel):
-    redirect_path: str | None = "/"
+class LegacyOAuthCodePayload(BaseModel):
+    code: str
 
 
 def _record_to_dict(record: UploadRecord) -> dict[str, Any]:
@@ -63,12 +72,6 @@ def _record_to_dict(record: UploadRecord) -> dict[str, Any]:
     }
 
 
-def _build_base_url(request: Request) -> str:
-    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    return f"{proto}://{host}"
-
-
 def _youtube_status(config: Config) -> dict[str, Any]:
     active = get_active_youtube_account(config.uploads_db_path)
     fallback_ready = bool(config.youtube_client_id and config.youtube_client_secret and config.youtube_refresh_token)
@@ -84,6 +87,7 @@ def _youtube_status(config: Config) -> dict[str, Any]:
             "last_refreshed_at": active.last_refreshed_at,
             "error": active.last_error or None,
             "has_env_fallback": fallback_ready,
+            "login_mode": "legacy-code",
         }
 
     if fallback_ready:
@@ -97,6 +101,7 @@ def _youtube_status(config: Config) -> dict[str, Any]:
             "last_refreshed_at": None,
             "error": None,
             "has_env_fallback": True,
+            "login_mode": "legacy-code",
         }
 
     return {
@@ -109,6 +114,7 @@ def _youtube_status(config: Config) -> dict[str, Any]:
         "last_refreshed_at": None,
         "error": None,
         "has_env_fallback": False,
+        "login_mode": "legacy-code",
     }
 
 
@@ -129,6 +135,21 @@ def create_app(config: Config) -> FastAPI:
         records = list_records(config)
         return {"items": [_record_to_dict(r) for r in records]}
 
+    @app.get("/api/videos/{upload_id}")
+    def get_video(upload_id: int) -> dict[str, Any]:
+        record = get_upload(config.uploads_db_path, upload_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        payload = _record_to_dict(record)
+        if record.match_id:
+            try:
+                payload["opendota_match_raw"] = fetch_match(record.match_id)
+            except Exception as err:
+                payload["opendota_match_raw_error"] = str(err)
+        else:
+            payload["opendota_match_raw"] = None
+        return payload
+
     @app.patch("/api/videos/{upload_id}")
     def update_video(upload_id: int, payload: UpdatePayload) -> dict[str, Any]:
         record = get_upload(config.uploads_db_path, upload_id)
@@ -144,9 +165,27 @@ def create_app(config: Config) -> FastAPI:
             fields["edited_tags"] = payload.tags
         if payload.sequence is not None:
             fields["sequence"] = payload.sequence
+        if payload.match_id is not None:
+            defaults = rebuild_defaults_for_match_id(
+                config,
+                Path(record.video_path),
+                match_id=payload.match_id,
+                sequence=payload.sequence if payload.sequence is not None else record.sequence,
+            )
+            rebuilt_tags = ",".join(defaults.tags)
+            fields["match_id"] = defaults.match_id
+            fields["default_title"] = defaults.title
+            fields["default_description"] = defaults.description
+            fields["default_tags"] = rebuilt_tags
+            fields["description_path"] = str(defaults.description_path)
+            fields["thumbnail_prompt"] = defaults.thumbnail_prompt
+            fields["edited_title"] = defaults.title
+            fields["edited_description"] = defaults.description
+            fields["edited_tags"] = rebuilt_tags
+            fields["error"] = None
 
         if payload.sequence is not None:
-            base_title = fields.get("edited_title") or record.edited_title or record.default_title or ""
+            base_title = fields.get("edited_title") or record.edited_title or fields.get("default_title") or record.default_title or ""
             fields["edited_title"] = apply_sequence_to_title(base_title, payload.sequence)
 
         updated = update_record(config, upload_id, fields)
@@ -154,6 +193,18 @@ def create_app(config: Config) -> FastAPI:
             raise HTTPException(status_code=404, detail="Upload not found")
 
         return _record_to_dict(updated)
+
+    @app.delete("/api/videos/{upload_id}")
+    def delete_video(upload_id: int) -> dict[str, Any]:
+        ok = delete_record(config, upload_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        return {"ok": True}
+
+    @app.post("/api/videos/resequence")
+    def resequence_videos() -> dict[str, Any]:
+        records = recalculate_sequences(config)
+        return {"ok": True, "count": len(records)}
 
     @app.post("/api/videos/{upload_id}/upload")
     def upload_video(upload_id: int) -> dict[str, Any]:
@@ -173,41 +224,29 @@ def create_app(config: Config) -> FastAPI:
     def youtube_status() -> dict[str, Any]:
         return _youtube_status(config)
 
-    @app.post("/api/youtube/connect/start")
-    def youtube_connect_start(payload: OAuthStartPayload, request: Request) -> dict[str, Any]:
+    @app.post("/api/youtube/login-link")
+    def youtube_login_link() -> dict[str, Any]:
         try:
-            auth_url = begin_youtube_oauth(config, _build_base_url(request), payload.redirect_path)
+            auth_url = begin_legacy_youtube_oauth(config)
         except YouTubeOAuthConfigError as err:
             raise HTTPException(status_code=400, detail=str(err)) from err
         return {"auth_url": auth_url}
 
-    @app.get("/api/youtube/connect/callback")
-    def youtube_connect_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
-        redirect_target = "/"
-        if state:
-            consumed = consume_oauth_state(config.uploads_db_path, state, "youtube")
-            if consumed and consumed.redirect_path:
-                redirect_target = consumed.redirect_path
-            elif not consumed:
-                redirect_target = "/?youtube=error&message=Invalid+or+expired+state"
-                return RedirectResponse(redirect_target, status_code=303)
-
-        if error:
-            q = urlencode({"youtube": "error", "message": error})
-            return RedirectResponse(f"{redirect_target}?{q}" if "?" not in redirect_target else f"{redirect_target}&{q}", status_code=303)
-        if not code:
-            q = urlencode({"youtube": "error", "message": "Missing authorization code"})
-            return RedirectResponse(f"{redirect_target}?{q}" if "?" not in redirect_target else f"{redirect_target}&{q}", status_code=303)
-
+    @app.post("/api/youtube/login-complete")
+    def youtube_login_complete(payload: LegacyOAuthCodePayload) -> dict[str, Any]:
         try:
-            from .youtube_auth import finish_youtube_oauth
-
-            finish_youtube_oauth(config, base_url=_build_base_url(request), code=code)
-            q = urlencode({"youtube": "connected"})
+            account = finish_legacy_youtube_oauth(config, payload.code.strip())
+        except YouTubeAuthError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
         except Exception as err:
-            q = urlencode({"youtube": "error", "message": str(err)})
+            raise HTTPException(status_code=500, detail=str(err)) from err
 
-        return RedirectResponse(f"{redirect_target}?{q}" if "?" not in redirect_target else f"{redirect_target}&{q}", status_code=303)
+        return {
+            "ok": True,
+            "channel_title": account.channel_title,
+            "channel_id": account.channel_id,
+            "google_account_email": account.google_account_email,
+        }
 
     @app.post("/api/youtube/disconnect")
     def youtube_disconnect() -> dict[str, Any]:

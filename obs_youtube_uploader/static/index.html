@@ -3,73 +3,104 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dota Uploader Dashboard</title>
+    <title>Dota Upload Manager</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <div class="bg-orbit"></div>
-    <main class="app shell">
-      <section class="hero panel">
-        <div>
-          <div class="eyebrow">Dota Workflow</div>
-          <h1>Dota Uploader Dashboard</h1>
-          <p>Review your queue faster, manage uploads, and connect YouTube from the site.</p>
+    <div class="dashboard-shell">
+      <aside class="sidebar">
+        <div class="brand-card panel">
+          <div class="eyebrow">Dota Ops</div>
+          <h1>Dota Upload Manager</h1>
+          <p>Faster video management for review, editing, YouTube connection, and upload operations.</p>
         </div>
-        <div class="hero-actions">
-          <button class="btn ghost" id="refresh">Refresh</button>
-        </div>
-      </section>
 
-      <section class="grid-top">
-        <div class="panel youtube-panel" id="youtube-panel"></div>
-        <div class="panel stats-panel">
-          <div class="section-title">Queue Overview</div>
-          <div class="stats" id="stats"></div>
-        </div>
-      </section>
-
-      <section class="panel filters-panel">
-        <div class="filters-row">
-          <div class="search-wrap">
-            <input id="search" type="search" placeholder="Search title, filename, match id…" />
-          </div>
-          <div class="pill-row" id="status-filters"></div>
-        </div>
-        <div class="hint" id="flash"></div>
-      </section>
-
-      <section class="workspace">
-        <div class="panel table-panel">
-          <div class="section-title">Video Queue</div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Seq</th>
-                  <th>Filename</th>
-                  <th>Title</th>
-                  <th>Match</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="videos"></tbody>
-            </table>
+        <div class="sidebar-block panel">
+          <div class="sidebar-title">Sections</div>
+          <div class="nav-list">
+            <button class="nav-item active" type="button">Queue Dashboard</button>
+            <button class="nav-item" type="button" id="youtube-nav-btn">YouTube Setup</button>
           </div>
         </div>
 
-        <aside class="panel detail-panel" id="detail-panel">
-          <div class="empty-state">Select a video to review and edit.</div>
-        </aside>
-      </section>
-    </main>
+        <div class="sidebar-block panel">
+          <div class="sidebar-title">Queue Snapshot</div>
+          <div id="stats" class="stats-stack"></div>
+        </div>
+
+        <div class="sidebar-block panel" id="youtube-panel"></div>
+      </aside>
+
+      <main class="main-layout">
+        <header class="topbar panel">
+          <div>
+            <div class="eyebrow">Desktop-first workflow</div>
+            <div class="page-title">Queue Control Center</div>
+            <div class="page-subtitle">Review on the left. Edit and act on the right.</div>
+          </div>
+
+          <div class="topbar-actions">
+            <div class="search-box">
+              <input id="search" type="search" placeholder="Search filename, title, match id..." />
+            </div>
+            <button class="btn ghost" id="refresh">Refresh</button>
+          </div>
+        </header>
+
+        <section class="summary-grid">
+          <div class="summary-card panel accent-blue">
+            <div class="summary-label">Pending</div>
+            <div class="summary-value" id="summary-pending">0</div>
+            <div class="summary-meta">Needs review or upload</div>
+          </div>
+          <div class="summary-card panel accent-amber">
+            <div class="summary-label">Uploading</div>
+            <div class="summary-value" id="summary-uploading">0</div>
+            <div class="summary-meta">Currently processing</div>
+          </div>
+          <div class="summary-card panel accent-red">
+            <div class="summary-label">Errors</div>
+            <div class="summary-value" id="summary-error">0</div>
+            <div class="summary-meta">Needs attention</div>
+          </div>
+          <div class="summary-card panel accent-green">
+            <div class="summary-label">Uploaded</div>
+            <div class="summary-value" id="summary-uploaded">0</div>
+            <div class="summary-meta">Finished videos</div>
+          </div>
+        </section>
+
+        <section class="filters-row panel">
+          <div class="filter-group" id="status-filters"></div>
+          <div class="hint" id="flash"></div>
+        </section>
+
+        <section class="workspace-grid">
+          <section class="queue-card panel">
+            <div class="section-head">
+              <div>
+                <div class="eyebrow">Management View</div>
+                <h2>Video Worklist</h2>
+              </div>
+              <div class="table-caption" id="table-count"></div>
+            </div>
+
+            <div class="list-shell" id="videos"></div>
+          </section>
+
+          <section class="editor-card panel" id="detail-panel">
+            <div class="empty-state">Select a video from the list to manage it.</div>
+          </section>
+        </section>
+      </main>
+    </div>
+
     <script src="/static/app.js"></script>
   </body>
 </html>

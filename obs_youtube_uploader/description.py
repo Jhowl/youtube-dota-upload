@@ -38,6 +38,18 @@ def _hashtagify(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
 
+def _player_name(player: dict[str, Any], heroes: dict[str, Any]) -> str:
+    personaname = str(player.get("personaname") or "").strip()
+    personaname = personaname.replace('>', '').replace('<', '').replace('"', '').strip()
+    hero = _hero_name(heroes, int(player.get("hero_id", 0) or 0))
+    if personaname:
+        return f"{personaname} ({hero})"
+    account_id = player.get("account_id")
+    if account_id:
+        return f"Player {account_id} ({hero})"
+    return hero
+
+
 def build_match_description(
     *,
     recording_start_utc: datetime,
@@ -108,6 +120,15 @@ def build_match_description(
             )
         )
         lines.append("Neutral: " + _format_item_list(items, [player.get("item_neutral")]))
+
+    players = match.get("players", []) or []
+    radiant_players = [p for p in players if int(p.get("player_slot", 0) or 0) < 128]
+    dire_players = [p for p in players if int(p.get("player_slot", 0) or 0) >= 128]
+
+    lines.append("")
+    lines.append("Players")
+    lines.append("Radiant: " + (", ".join(_player_name(p, heroes) for p in radiant_players) or "—"))
+    lines.append("Dire: " + (", ".join(_player_name(p, heroes) for p in dire_players) or "—"))
 
     lines.append("")
     lines.append("Links")

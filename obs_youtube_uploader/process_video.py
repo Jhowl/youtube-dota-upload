@@ -257,9 +257,14 @@ def _description_path(video_path: Path) -> Path:
     return video_path.with_suffix(".txt")
 
 
-def build_defaults(config: Config, video_path: Path, *, sequence: int | None = None) -> VideoDefaults:
+def _build_defaults_for_match(
+    config: Config,
+    video_path: Path,
+    *,
+    match_id: int,
+    sequence: int | None = None,
+) -> VideoDefaults:
     recording_start_utc = _parse_obs_filename_time_to_utc(video_path, config.recording_tz)
-    match_id = _resolve_match_id(config, recording_start_utc)
 
     match = fetch_match(match_id)
     heroes = fetch_heroes()
@@ -327,6 +332,22 @@ def build_defaults(config: Config, video_path: Path, *, sequence: int | None = N
         description_path=description_path,
         thumbnail_prompt=thumbnail_prompt,
     )
+
+
+def build_defaults(config: Config, video_path: Path, *, sequence: int | None = None) -> VideoDefaults:
+    recording_start_utc = _parse_obs_filename_time_to_utc(video_path, config.recording_tz)
+    match_id = _resolve_match_id(config, recording_start_utc)
+    return _build_defaults_for_match(config, video_path, match_id=match_id, sequence=sequence)
+
+
+def rebuild_defaults_for_match_id(
+    config: Config,
+    video_path: Path,
+    *,
+    match_id: int,
+    sequence: int | None = None,
+) -> VideoDefaults:
+    return _build_defaults_for_match(config, video_path, match_id=match_id, sequence=sequence)
 
 
 def perform_upload(

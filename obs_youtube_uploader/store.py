@@ -143,11 +143,19 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
 
 def get_next_sequence(db_path: Path, sequence_start: int) -> int:
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT MAX(sequence) AS max_seq FROM uploads").fetchone()
-    max_seq = int(row["max_seq"]) if row and row["max_seq"] is not None else None
-    if max_seq is None:
+        rows = conn.execute(
+            "SELECT sequence FROM uploads WHERE sequence IS NOT NULL ORDER BY sequence ASC"
+        ).fetchall()
+    if not rows:
         return sequence_start
-    return max(max_seq + 1, sequence_start)
+
+    expected = sequence_start
+    for row in rows:
+        seq = int(row["sequence"])
+        if seq != expected:
+            return expected
+        expected += 1
+    return expected
 
 
 def _row_to_record(row: sqlite3.Row | None) -> UploadRecord | None:
@@ -183,7 +191,14 @@ def get_upload(db_path: Path, upload_id: int) -> UploadRecord | None:
 def list_uploads(db_path: Path) -> list[UploadRecord]:
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT * FROM uploads ORDER BY created_at DESC, id DESC"
+            """
+            SELECT * FROM uploads
+            ORDER BY
+                CASE WHEN video_path LIKE '%/uploaded/%' OR status = 'uploaded' THEN 1 ELSE 0 END ASC,
+                video_path DESC,
+                created_at DESC,
+                id DESC
+            """
         ).fetchall()
     return [UploadRecord(**dict(r)) for r in rows]
 
@@ -253,6 +268,29 @@ def update_upload(db_path: Path, upload_id: int, fields: dict[str, Any]) -> Uplo
         conn.execute(f"UPDATE uploads SET {sets} WHERE id = ?", values)
         row = conn.execute("SELECT * FROM uploads WHERE id = ?", (upload_id,)).fetchone()
     return _row_to_record(row)
+
+
+def delete_upload(db_path: Path, upload_id: int) -> bool:
+    with _connect(db_path) as conn:
+        cur = conn.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
+    return cur.rowcount > 0
+
+
+def resequence_uploads(db_path: Path, sequence_start: int) -> list[UploadRecord]:
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, video_path FROM uploads WHERE sequence IS NOT NULL ORDER BY video_path ASC, created_at ASC, id ASC"
+        ).fetchall()
+        next_seq = sequence_start
+        for row in rows:
+            conn.execute(
+                "UPDATE uploads SET sequence = ?, updated_at = ? WHERE id = ?",
+                (next_seq, now, row["id"]),
+            )
+            next_seq += 1
+        refreshed = conn.execute("SELECT * FROM uploads ORDER BY CASE WHEN video_path LIKE '%/uploaded/%' OR status = 'uploaded' THEN 1 ELSE 0 END ASC, video_path DESC, created_at DESC, id DESC").fetchall()
+    return [UploadRecord(**dict(r)) for r in refreshed]
 
 
 def set_status(
